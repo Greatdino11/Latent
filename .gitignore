@@ -1,0 +1,9 @@
+build/
+xcuserdata/
+*.xcuserstate
+.DS_Store
+install-log.txt
+lookbook*.jpg
+tools/lookbook-input/
+dist/
+docs-raw-calibration.jpg

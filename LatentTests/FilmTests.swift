@@ -1,0 +1,180 @@
+import CoreImage
+import XCTest
+@testable import Latent
+
+final class FilmCurveTests: XCTestCase {
+    func testCurveIsMonotonicAndBounded() {
+        for stock in FilmStock.all {
+            var last = -1.0
+            for i in 0...200 {
+                let x = 0.18 * pow(2, Double(i - 100) / 10)       // -10 … +10 stops
+                let y = LUT.curve(x, stock.contrast.y, stock.balance.y, stock.black.y, stock.white.y)
+                XCTAssertGreaterThanOrEqual(y, last - 1e-9, "\(stock.id) curve dips at \(x)")
+                XCTAssert((0...1).contains(y), "\(stock.id) out of range")
+                last = y
+            }
+        }
+    }
+
+    func testMidGreyPrintsMidGrey() {
+        for stock in FilmStock.all where !stock.isMonochrome {
+            let y = LUT.transform(RGB(repeating: 0.18), stock)
+            XCTAssert((0.35...0.65).contains(LUT.luma(y)), "\(stock.id) mid grey prints at \(y)")
+        }
+    }
+
+    func testMonochromeStocksAreNeutral() {
+        for stock in FilmStock.all where stock.isMonochrome {
+            let y = LUT.transform(RGB(0.6, 0.2, 0.1), stock)
+            XCTAssertEqual(y.x, y.y, accuracy: 0.03); XCTAssertEqual(y.y, y.z, accuracy: 0.03)
+        }
+    }
+
+    /// Bright skies keep their colour instead of fading to the print white.
+    func testBrightSkyStaysBlue() {
+        let sky = RGB(0.35, 0.6, 1.4)   // a bright blue sky, about +2.5 stops
+        for stock in [FilmStock.coast, .valley, .clear] {
+            let y = LUT.transform(sky, stock)
+            XCTAssertGreaterThan(y.z - y.x, 0.05, "\(stock.id) sky lost its blue: \(y)")
+        }
+    }
+
+    func testCacheKeyTracksParameters() {
+        let a = LUT.cacheKey(.honey, expandSDR: false)
+        XCTAssertEqual(a, LUT.cacheKey(.honey, expandSDR: false))
+        XCTAssertNotEqual(a, LUT.cacheKey(.honey, expandSDR: true))
+        XCTAssertNotEqual(a, LUT.cacheKey(FilmStock.honey.with(\.saturation, 0.5), expandSDR: false))
+    }
+
+    func testStrengthScalesTexture() {
+        let s = FilmStock.night.scaled(by: 0)
+        XCTAssertEqual(s.halation, 0); XCTAssertEqual(s.aberration, 0)
+        XCTAssertGreaterThan(s.grain, 0, "grain is kept at zero strength")
+    }
+}
+
+final class CropTests: XCTestCase {
+    private func image(_ w: CGFloat, _ h: CGFloat) -> CIImage { CIImage(color: .gray).cropped(to: CGRect(x: 0, y: 0, width: w, height: h)) }
+
+    func testPortraitThreeTwo() {
+        let e = FilmPipeline.crop(image(3024, 4032), to: .r3x2).extent
+        XCTAssertEqual(e.width / e.height, 2.0 / 3.0, accuracy: 0.002)
+        XCTAssertEqual(e.origin, .zero)
+    }
+
+    func testLandscapeSquareAndPano() {
+        XCTAssertEqual(FilmPipeline.crop(image(4032, 3024), to: .r1x1).extent.size, CGSize(width: 3024, height: 3024))
+        let p = FilmPipeline.crop(image(4032, 3024), to: .pano).extent
+        XCTAssertEqual(p.width / p.height, 65.0 / 24.0, accuracy: 0.01)
+    }
+
+    func testFullFrameKeepsEverything() {
+        XCTAssertEqual(FilmPipeline.crop(image(4032, 3024), to: nil).extent.size, CGSize(width: 4032, height: 3024))
+    }
+}
+
+final class RecipeTests: XCTestCase {
+    /// A recipe written by the first version with negatives: none of the later keys.
+    func testOldRecipeStillDecodes() throws {
+        let json = #"{"exposure":0,"aspect":"3:2","grainAmount":1,"halation":true,"flare":false,"dateStamp":true,"frame":"white","date":800000000,"sceneReferred":true}"#
+        let r = try JSONDecoder().decode(DevelopOptions.self, from: Data(json.utf8))
+        XCTAssertEqual(r.aspect, .r3x2)
+        XCTAssertEqual(r.flareStrength, 0)
+        XCTAssertNil(r.pushPull); XCTAssertNil(r.strength); XCTAssertNil(r.negativeFormat)
+        XCTAssertEqual(r.frame, .white)
+    }
+
+    func testRoundTrip() throws {
+        var o = DevelopOptions(); o.pushPull = -0.7; o.strength = 0.4; o.aspect = nil; o.negativeFormat = 2
+        let back = try JSONDecoder().decode(DevelopOptions.self, from: JSONEncoder().encode(o))
+        XCTAssertEqual(back.pushPull, -0.7); XCTAssertEqual(back.strength, 0.4); XCTAssertNil(back.aspect)
+        XCTAssertEqual(back.negativeFormat, 2)
+    }
+
+    @MainActor
+    func testCaptureDateFromExif() {
+        let meta: [String: Any] = [kCGImagePropertyExifDictionary as String: [
+            kCGImagePropertyExifDateTimeOriginal as String: "2025:10:31 18:45:12",
+            kCGImagePropertyExifOffsetTimeOriginal as String: "-05:00",
+        ]]
+        let d = AppModel.captureDate(meta)
+        XCTAssertEqual(d?.timeIntervalSince1970, 1761954312)
+        XCTAssertNil(AppModel.captureDate([:]))
+    }
+}
+
+final class NegativeCodecTests: XCTestCase {
+    private let context = CIContext(options: [.cacheIntermediates: false])
+    private let p3 = CGColorSpace(name: CGColorSpace.displayP3)!
+
+    private func value(of image: CIImage) -> Float {
+        var px = [Float](repeating: 0, count: 4)
+        context.render(image, toBitmap: &px, rowBytes: 16, bounds: CGRect(x: 0, y: 0, width: 1, height: 1), format: .RGBAf, colorSpace: nil)
+        return px[1]
+    }
+
+    /// Encode → 10-bit HEIF → decode keeps scene values from deep shadow to bright highlight.
+    func testRoundTripThroughHEIF() throws {
+        for v in [0.0028, 0.02, 0.18, 1.0, 6.0] {
+            let scene = CIImage(color: CIColor(red: v, green: v, blue: v, alpha: 1, colorSpace: CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!)!)
+                .cropped(to: CGRect(x: 0, y: 0, width: 16, height: 16))
+            let heif = try context.heif10Representation(of: NegativeCodec.encode(scene), colorSpace: p3, options: [:])
+            let back = NegativeCodec.decode(try XCTUnwrap(CIImage(data: heif)), format: NegativeCodec.current)
+            let got = Double(value(of: back))
+            XCTAssertEqual(got, v, accuracy: v * 0.04 + 0.0003, "value \(v) came back as \(got)")
+        }
+    }
+
+    func testLegacyNegativesStillDecode() {
+        let stored = CIImage(color: CIColor(red: 0.0225, green: 0.0225, blue: 0.0225, alpha: 1, colorSpace: CGColorSpace(name: CGColorSpace.linearSRGB)!)!)
+            .cropped(to: CGRect(x: 0, y: 0, width: 1, height: 1))
+        XCTAssertEqual(Double(value(of: NegativeCodec.decode(stored, format: nil))), 0.18, accuracy: 0.002)
+    }
+}
+
+final class RollArchiveTests: XCTestCase {
+    func testExportImportRoundTrip() throws {
+        let fm = FileManager.default
+        let src = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let dst = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: src, withIntermediateDirectories: true)
+        let files = ["1_honey.jpg": Data(repeating: 7, count: 5000), "1.neg.heic": Data(repeating: 3, count: 12000),
+                     "1.recipe.json": Data("{}".utf8), "empty.photos": Data()]
+        for (n, d) in files { try d.write(to: src.appendingPathComponent(n)) }
+
+        let archive = try RollArchive.export(from: src)
+        XCTAssertEqual(try RollArchive.importArchive(archive, into: dst), files.count)
+        for (n, d) in files { XCTAssertEqual(try Data(contentsOf: dst.appendingPathComponent(n)), d, n) }
+        XCTAssertEqual(try RollArchive.importArchive(archive, into: dst), 0, "existing files are kept, not duplicated")
+    }
+
+    func testRejectsNonArchive() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data("hello".utf8).write(to: url)
+        XCTAssertThrowsError(try RollArchive.importArchive(url, into: FileManager.default.temporaryDirectory))
+    }
+
+    /// A crafted archive can't write outside the roll folder.
+    func testIgnoresPathTraversal() throws {
+        var data = Data("LATROLL1".utf8)
+        let name = Data("../evil.txt".utf8)
+        data += withUnsafeBytes(of: UInt32(name.count).littleEndian) { Data($0) } + name
+        data += withUnsafeBytes(of: UInt64(3).littleEndian) { Data($0) } + Data("bad".utf8)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try data.write(to: url)
+        let dst = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        XCTAssertEqual(try RollArchive.importArchive(url, into: dst), 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dst.deletingLastPathComponent().appendingPathComponent("evil.txt").path))
+    }
+}
+
+extension NegativeCodecTests {
+    /// Same check without the HEIF step, to tell encoding problems from file-format problems.
+    func testCodecMathKeepsHighlights() {
+        let scene = CIImage(color: CIColor(red: 6, green: 6, blue: 6, alpha: 1, colorSpace: CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!)!)
+            .cropped(to: CGRect(x: 0, y: 0, width: 1, height: 1))
+        XCTAssertEqual(Double(value(of: scene)), 6, accuracy: 0.01, "test input itself")
+        let back = NegativeCodec.decode(NegativeCodec.encode(scene), format: NegativeCodec.current)
+        XCTAssertEqual(Double(value(of: back)), 6, accuracy: 0.05)
+    }
+}

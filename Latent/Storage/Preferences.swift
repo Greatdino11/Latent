@@ -1,0 +1,100 @@
+import Foundation
+
+/// User settings, persisted to UserDefaults.
+@Observable
+final class Preferences {
+    @ObservationIgnored private let d = UserDefaults.standard
+
+    var selectedStockID: String { didSet { d.set(selectedStockID, forKey: "selectedStock") } }
+    var aspect: AspectRatio { didSet { d.set(aspect.rawValue, forKey: "aspect") } }
+    var grainAmount: Double { didSet { d.set(grainAmount, forKey: "grain") } }
+    var halation: Bool { didSet { d.set(halation, forKey: "halation") } }
+    /// Lens flare strength: 0 off … 1 full … 1.5 strong.
+    var flareAmount: Double { didSet { d.set(flareAmount, forKey: "flareAmount") } }
+    var dateStamp: Bool { didSet { d.set(dateStamp, forKey: "dateStamp") } }
+    var frameStyle: FrameStyle { didSet { d.set(frameStyle.rawValue, forKey: "frame") } }
+    var saveToPhotos: Bool { didSet { d.set(saveToPhotos, forKey: "saveToPhotos") } }
+    var saveOriginal: Bool { didSet { d.set(saveOriginal, forKey: "saveOriginal") } }
+    var showGrid: Bool { didSet { d.set(showGrid, forKey: "grid") } }
+    var showLevel: Bool { didSet { d.set(showLevel, forKey: "level") } }
+    var stockOrder: [String] { didSet { d.set(stockOrder, forKey: "stockOrder") } }
+    var hiddenStocks: Set<String> { didSet { d.set(Array(hiddenStocks), forKey: "hidden") } }
+    var randomPool: Set<String> { didSet { d.set(Array(randomPool), forKey: "randomPool") } }
+    var saveLocation: Bool { didSet { d.set(saveLocation, forKey: "saveLocation") } }
+    var haptics: Bool { didSet { d.set(haptics, forKey: "haptics") } }
+    var advanceSound: Bool { didSet { d.set(advanceSound, forKey: "advanceSound") } }
+    /// Show each new frame developing full screen (Random hides the stock until then).
+    var bigReveal: Bool { didSet { d.set(bigReveal, forKey: "bigReveal") } }
+    /// Default look strength per stock id (0…1); missing = 1.
+    var stockStrength: [String: Double] { didSet { d.set(stockStrength, forKey: "stockStrength") } }
+    /// The first-launch introduction has been shown.
+    var onboarded: Bool { didSet { d.set(onboarded, forKey: "onboarded") } }
+
+    init() {
+        d.register(defaults: [
+            "selectedStock": FilmStock.randomID, "aspect": AspectRatio.r3x2.rawValue, "grain": 1.0,
+            "halation": true, "flareAmount": 0.6, "dateStamp": false, "frame": FrameStyle.none.rawValue,
+            "saveToPhotos": true, "saveOriginal": false, "grid": false, "level": true,
+            "saveLocation": false, "haptics": true, "advanceSound": false, "bigReveal": false,
+        ])
+        selectedStockID = d.string(forKey: "selectedStock") ?? FilmStock.randomID
+        aspect = AspectRatio(rawValue: d.string(forKey: "aspect") ?? "") ?? .r3x2
+        grainAmount = d.double(forKey: "grain")
+        halation = d.bool(forKey: "halation")
+        // Earlier builds had an on/off switch; carry "off" over once, then drop the old key.
+        if d.object(forKey: "flare") as? Bool == false { d.set(0.0, forKey: "flareAmount") }
+        d.removeObject(forKey: "flare")
+        flareAmount = d.double(forKey: "flareAmount")
+        dateStamp = d.bool(forKey: "dateStamp")
+        frameStyle = FrameStyle(rawValue: d.string(forKey: "frame") ?? "") ?? .none
+        saveToPhotos = d.bool(forKey: "saveToPhotos")
+        saveOriginal = d.bool(forKey: "saveOriginal")
+        showGrid = d.bool(forKey: "grid")
+        showLevel = d.bool(forKey: "level")
+        stockOrder = d.stringArray(forKey: "stockOrder") ?? FilmStock.all.map(\.id)
+        hiddenStocks = Set(d.stringArray(forKey: "hidden") ?? [])
+        randomPool = Set(d.stringArray(forKey: "randomPool") ?? [])
+        saveLocation = d.bool(forKey: "saveLocation")
+        haptics = d.bool(forKey: "haptics")
+        advanceSound = d.bool(forKey: "advanceSound")
+        bigReveal = d.bool(forKey: "bigReveal")
+        stockStrength = d.dictionary(forKey: "stockStrength") as? [String: Double] ?? [:]
+        // Existing users (who already have photos) skip the introduction.
+        let hasRoll = (try? FileManager.default.contentsOfDirectory(atPath: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Roll").path))?.isEmpty == false
+        onboarded = d.bool(forKey: "onboarded") || hasRoll
+    }
+
+    func strength(for stock: FilmStock) -> Double { stockStrength[stock.id] ?? 1 }
+
+    /// All stocks in the user's order (new stocks appended).
+    var orderedStocks: [FilmStock] {
+        let known = stockOrder.compactMap(FilmStock.with(id:))
+        return known + FilmStock.all.filter { !stockOrder.contains($0.id) }
+    }
+
+    var visibleStocks: [FilmStock] { orderedStocks.filter { !hiddenStocks.contains($0.id) } }
+
+    var isRandom: Bool { selectedStockID == FilmStock.randomID || FilmStock.with(id: selectedStockID) == nil }
+
+    /// The stock for the next frame. Random mode draws from the pool (or every visible stock).
+    func resolveStock() -> FilmStock {
+        if !isRandom, let s = FilmStock.with(id: selectedStockID) { return s }
+        let pool = visibleStocks.filter { randomPool.isEmpty || randomPool.contains($0.id) }
+        return pool.randomElement() ?? visibleStocks.randomElement() ?? .honey
+    }
+
+    func moveStocks(from source: IndexSet, to destination: Int) {
+        var ids = orderedStocks.map(\.id)
+        ids.move(fromOffsets: source, toOffset: destination)
+        stockOrder = ids
+    }
+
+    func toggleHidden(_ id: String) {
+        if hiddenStocks.contains(id) { hiddenStocks.remove(id) } else { hiddenStocks.insert(id) }
+        if hiddenStocks.contains(selectedStockID) { selectedStockID = FilmStock.randomID }
+    }
+
+    func toggleRandom(_ id: String) {
+        if randomPool.contains(id) { randomPool.remove(id) } else { randomPool.insert(id) }
+    }
+}
