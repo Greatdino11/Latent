@@ -28,6 +28,8 @@ final class PreviewView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .black
+        // The video layer draws past its bounds; keep it inside the viewfinder so the aspect mask covers it.
+        clipsToBounds = true
         let double = UITapGestureRecognizer(target: self, action: #selector(doubleTapped))
         double.numberOfTapsRequired = 2
         let single = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))

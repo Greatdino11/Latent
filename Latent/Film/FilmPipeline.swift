@@ -84,6 +84,14 @@ enum FilmPipeline {
         return img.cropped(to: extent)
     }
 
+    /// The largest whole-pixel rectangle inside `r`. Scaled RAW decodes have fractional edges; rounding outward
+    /// (`.integral`) would keep a half-covered edge column that prints as a dark line.
+    static func wholePixels(_ r: CGRect) -> CGRect {
+        let x0 = ceil(r.minX - 0.001), y0 = ceil(r.minY - 0.001)
+        let x1 = floor(r.maxX + 0.001), y1 = floor(r.maxY + 0.001)
+        return CGRect(x: x0, y: y0, width: max(0, x1 - x0), height: max(0, y1 - y0))
+    }
+
     /// Centre-crop to the aspect ratio, matching the frame's own orientation.
     static func crop(_ image: CIImage, to aspect: AspectRatio?) -> CIImage {
         let e = image.extent

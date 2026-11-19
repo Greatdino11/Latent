@@ -9,8 +9,9 @@ enum Finisher {
         guard options.dateStamp || options.frame != .none else { return cg }
         let w = CGFloat(cg.width), h = CGFloat(cg.height), short = min(w, h)
         let framed = options.frame != .none
-        let border = framed ? short * 0.045 : 0
-        let footer = framed ? short * 0.09 : 0
+        // Whole pixels: a fractional canvas gets rounded up and its last column/row is never painted (a dark sliver).
+        let border = framed ? (short * 0.045).rounded() : 0
+        let footer = framed ? (short * 0.09).rounded() : 0
         let size = CGSize(width: w + border * 2, height: h + border * 2 + footer)
 
         let format = UIGraphicsImageRendererFormat()

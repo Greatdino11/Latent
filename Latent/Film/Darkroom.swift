@@ -76,13 +76,13 @@ actor Darkroom {
     /// Renders an image once into a GPU-resident half-float buffer (extended linear, so highlights above 1.0
     /// survive) and returns an image backed by it. ~8 bytes a pixel: ~100 MB for a 12MP frame, freed after the develop.
     private func materialize(_ image: CIImage) throws -> CIImage {
-        let e = image.extent.integral
+        let e = FilmPipeline.wholePixels(image.extent)
         let attrs: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
                                       kCVPixelBufferMetalCompatibilityKey: true]
         var buffer: CVPixelBuffer?
         CVPixelBufferCreate(nil, Int(e.width), Int(e.height), kCVPixelFormatType_64RGBAHalf, attrs as CFDictionary, &buffer)
         guard let buffer else { throw DarkroomError.render }
-        context.render(image.transformed(by: CGAffineTransform(translationX: -e.minX, y: -e.minY)), to: buffer,
+        context.render(image.cropped(to: e).transformed(by: CGAffineTransform(translationX: -e.minX, y: -e.minY)), to: buffer,
                        bounds: CGRect(origin: .zero, size: e.size), colorSpace: linear)
         return CIImage(cvPixelBuffer: buffer, options: [.colorSpace: linear])
     }
@@ -188,7 +188,10 @@ actor Darkroom {
             if raw.isLocalToneMapSupported { raw.localToneMapAmount = 0 }
             if raw.isSharpnessSupported { raw.sharpnessAmount = 0 }
             if raw.isContrastSupported { raw.contrastAmount = 0 }
-            guard let image = raw.outputImage else { throw DarkroomError.decode }
+            guard var image = raw.outputImage else { throw DarkroomError.decode }
+            // A scaled decode's last row/column is only partly covered (e.g. 8064 × 0.5001 = 4033.2 of 4034 px)
+            // and would print as a dark line; trim one pixel all round.
+            if raw.scaleFactor < 0.999 { image = image.cropped(to: image.extent.insetBy(dx: 1, dy: 1)) }
             return (image, true)
         case .processed(let data):
             guard let image = CIImage(data: data, options: [.applyOrientationProperty: true]) else {

@@ -185,3 +185,30 @@ extension NegativeCodecTests {
         XCTAssertEqual(Double(value(of: back)), 6, accuracy: 0.05)
     }
 }
+
+final class EdgeTests: XCTestCase {
+    func testWholePixelsRoundsInward() {
+        let r = FilmPipeline.wholePixels(CGRect(x: 0.3, y: 0, width: 4033.7, height: 2688.6))
+        XCTAssertEqual(r, CGRect(x: 1, y: 0, width: 4033, height: 2688))
+        XCTAssertEqual(FilmPipeline.wholePixels(CGRect(x: 0, y: 0, width: 4032, height: 3024)), CGRect(x: 0, y: 0, width: 4032, height: 3024))
+    }
+
+    /// The framed print's outer edges are paper, not a dark unpainted column/row.
+    func testFramedPrintHasNoDarkEdge() throws {
+        for (w, h) in [(3023, 4031), (4033, 2689), (1001, 667)] {
+            let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+            ctx.setFillColor(gray: 0.5, alpha: 1); ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+            var o = DevelopOptions(); o.frame = .white
+            let out = Finisher.finish(ctx.makeImage()!, stock: .honey, options: o)
+            let ow = out.width, oh = out.height
+            var px = [UInt8](repeating: 0, count: ow * oh * 4)
+            let read = CGContext(data: &px, width: ow, height: oh, bitsPerComponent: 8, bytesPerRow: ow * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                 bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+            read.draw(out, in: CGRect(x: 0, y: 0, width: ow, height: oh))
+            for (x, y, edge) in [(ow - 1, oh / 2, "right"), (0, oh / 2, "left"), (ow / 2, 0, "top"), (ow / 2, oh - 1, "bottom")] {
+                XCTAssertGreaterThan(px[(y * ow + x) * 4], 230, "\(w)x\(h): \(edge) edge isn't paper")
+            }
+        }
+    }
+}
