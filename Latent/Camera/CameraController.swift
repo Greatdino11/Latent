@@ -85,8 +85,25 @@ final class CameraController: NSObject {
     func setPortrait(_ on: Bool) async -> Bool {
         if isSimulated { return on }
         guard configured else { wantsPortrait = on; return false }
+        // On the back, the combined triple camera has no depth: portrait swaps to a depth-capable camera
+        // (dual-wide, dual or LiDAR) and back again, so the session is rebuilt either way.
+        if position == .back {
+            let setup: Setup = await withCheckedContinuation { cont in
+                queue.async {
+                    self.wantsPortrait = on
+                    cont.resume(returning: self.configure(position: .back))
+                }
+            }
+            if setup.ok { apply(setup) }
+            return await withCheckedContinuation { cont in queue.async { cont.resume(returning: self.photoOutput.isDepthDataDeliveryEnabled) } }
+        }
         return await withCheckedContinuation { cont in queue.async { cont.resume(returning: self.applyPortrait(on)) } }
     }
+
+    /// Back cameras that can capture depth, in order of preference.
+    private static let backDepthTypes: [AVCaptureDevice.DeviceType] = [.builtInDualWideCamera, .builtInDualCamera, .builtInLiDARDepthCamera]
+
+    private static func hasDepth(_ dev: AVCaptureDevice) -> Bool { dev.formats.contains { !$0.supportedDepthDataFormats.isEmpty } }
 
     /// Camera queue.
     private func applyPortrait(_ on: Bool) -> Bool {
@@ -167,11 +184,15 @@ final class CameraController: NSObject {
 
     private func configure(position: AVCaptureDevice.Position) -> Setup {
         let failed = Setup(ok: false, lenses: [], selected: 0, flash: false)
-        let priority: [AVCaptureDevice.DeviceType] = position == .back
+        let normal: [AVCaptureDevice.DeviceType] = position == .back
             ? [.builtInTripleCamera, .builtInDualWideCamera, .builtInDualCamera, .builtInWideAngleCamera]
             : [.builtInTrueDepthCamera, .builtInWideAngleCamera]
+        let priority = position == .back && wantsPortrait ? Self.backDepthTypes + normal : normal
         let found = AVCaptureDevice.DiscoverySession(deviceTypes: priority, mediaType: .video, position: position).devices
-        guard let dev = priority.lazy.compactMap({ t in found.first { $0.deviceType == t } }).first,
+        let usable = position == .back && wantsPortrait
+            ? priority.lazy.compactMap { t in found.first { $0.deviceType == t && Self.hasDepth($0) } }.first
+            : nil
+        guard let dev = usable ?? priority.lazy.compactMap({ t in found.first { $0.deviceType == t } }).first,
               let newInput = try? AVCaptureDeviceInput(device: dev) else { return failed }
 
         session.beginConfiguration()
@@ -188,7 +209,10 @@ final class CameraController: NSObject {
             session.addOutput(photoOutput)
         }
         photoOutput.maxPhotoQualityPrioritization = .quality
-        // Shoot Apple ProRAW where available: it lets the darkroom skip the phone's tone mapping and sharpening.
+        // Leaving portrait (or a fresh camera): no depth, and ProRAW where available — it lets the darkroom skip the
+        // phone's tone mapping and sharpening. Portrait turns depth on below, after the session is set up.
+        photoOutput.isPortraitEffectsMatteDeliveryEnabled = false
+        photoOutput.isDepthDataDeliveryEnabled = false
         photoOutput.isAppleProRAWEnabled = photoOutput.isAppleProRAWSupported
         pickPhotoDimensions(dev)
         // Selfies come out the way the viewfinder showed them.
@@ -222,7 +246,8 @@ final class CameraController: NSObject {
         if wantsPortrait { _ = applyPortrait(true) }
         if wantsRunning, !session.isRunning { session.startRunning() }
         return Setup(ok: true, lenses: lenses, selected: selected, flash: dev.hasFlash,
-                     depth: dev.formats.contains { !$0.supportedDepthDataFormats.isEmpty })
+                     depth: Self.hasDepth(dev) || (position == .back && AVCaptureDevice.DiscoverySession(
+                        deviceTypes: Self.backDepthTypes, mediaType: .video, position: .back).devices.contains(where: Self.hasDepth)))
     }
 
     private static func label(_ x: CGFloat) -> String {
