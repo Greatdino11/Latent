@@ -97,7 +97,8 @@ extension FilmStock {
         return s
     }()
 
-    static let all: [FilmStock] = [honey, coast, valley, pine, dusk, night, sunny, clear, silver, noir]
+    static let all: [FilmStock] = [honey, coast, valley, pine, dusk, twilight, night, reel, sunny, cross, bypass, clear,
+                                   silver, umber, noir]
 
     static func with(id: String) -> FilmStock? { all.first { $0.id == id } }
 
@@ -243,6 +244,77 @@ extension FilmStock {
         return s
     }()
 
+    /// Blue-hour stock: keeps a deep blue sky over a glowing warm horizon, with cool shadows.
+    static let twilight: FilmStock = {
+        var s = FilmStock(id: "twilight", name: "Twilight", iso: 400,
+                          blurb: "Blue hour. Deep blue skies over a glowing horizon, cool shadows, warm lights.")
+        s.exposureBias = 0.1
+        s.contrast = RGB(0.70, 0.68, 0.62); s.balance = RGB(0.02, -0.02, 0.10)
+        s.black = RGB(0.035, 0.045, 0.07); s.white = RGB(0.98, 0.95, 0.92)
+        s.saturation = 1.06; s.temperature = -0.1
+        s.hue(.red, 0, sat: 1.1)
+        s.hue(.yellow, -8, sat: 1.15, lum: 0.03)
+        s.hue(.cyan, 10, sat: 1.1)
+        s.hue(.blue, 0, sat: 1.2, lum: -0.06)
+        s.hue(.magenta, -10, sat: 1.0)
+        s.shadowTint = RGB(-0.01, 0, 0.015)
+        s.highlightColour = 0.85
+        s.grain = 0.55; s.halation = 0.8; s.bloom = 0.35; s.softness = 0.3; s.aberration = 0.5; s.flare = 0.6
+        s.vignette = 0.3
+        return s
+    }()
+
+    /// Motion-picture look: teal shadows, orange skin and lights, gentle contrast.
+    static let reel: FilmStock = {
+        var s = FilmStock(id: "reel", name: "Reel", iso: 500,
+                          blurb: "Cinema stock. Teal shadows, orange skin and lamps, low contrast, soft glow.")
+        s.exposureBias = 0.15
+        s.contrast = RGB(0.62, 0.60, 0.56); s.balance = RGB(0.18, 0.0, -0.10)
+        s.black = RGB(0.035, 0.07, 0.085); s.white = RGB(0.98, 0.95, 0.86)
+        s.saturation = 0.92
+        s.hue(.red, 8, sat: 1.1)
+        s.hue(.yellow, -12, sat: 1.12)
+        s.hue(.green, 38, sat: 0.55)
+        s.hue(.cyan, 0, sat: 1.15)
+        s.hue(.blue, -22, sat: 0.95)
+        s.shadowTint = RGB(-0.04, 0.012, 0.035); s.highlightTint = RGB(0.035, 0.012, -0.03)
+        s.grain = 0.45; s.grainSize = 1.1; s.halation = 0.7; s.bloom = 0.4; s.softness = 0.45; s.aberration = 0.3
+        s.flare = 0.5; s.vignette = 0.35
+        return s
+    }()
+
+    /// Slide film developed as a negative: yellow-green highlights, blue shadows, loud colour.
+    static let cross: FilmStock = {
+        var s = FilmStock(id: "cross", name: "Cross", iso: 100,
+                          blurb: "Cross-processed. Yellow-green highlights, blue shadows, loud, punchy colour.")
+        s.exposureBias = 0.15
+        s.contrast = RGB(0.80, 0.86, 1.05); s.balance = RGB(0.05, 0.12, -0.25)
+        s.black = RGB(0.03, 0.055, 0.10); s.white = RGB(0.98, 1.0, 0.80)
+        s.saturation = 1.2; s.tint = -0.15
+        s.hue(.red, 0, sat: 1.2)
+        s.hue(.yellow, -4, sat: 1.2)
+        s.hue(.green, -10, sat: 1.1)
+        s.hue(.blue, 0, sat: 1.1)
+        s.highlightColour = 0.4
+        s.grain = 0.4; s.halation = 0.4; s.bloom = 0.25; s.softness = 0.2; s.aberration = 0.5; s.flare = 0.5
+        s.vignette = 0.4
+        return s
+    }()
+
+    /// Bleach bypass: silver left in the print — desaturated, contrasty, metallic.
+    static let bypass: FilmStock = {
+        var s = FilmStock(id: "bypass", name: "Bypass", iso: 200,
+                          blurb: "Bleach bypass. Silvery, desaturated and contrasty, with hard shadows.")
+        s.contrast = RGB(0.95, 0.95, 0.92)
+        s.black = RGB(0.03, 0.032, 0.035); s.white = RGB(0.96, 0.96, 0.95)
+        s.saturation = 0.5; s.temperature = -0.05
+        s.hue(.red, 0, sat: 0.8)
+        s.highlightColour = 0.3
+        s.grain = 0.55; s.grainSize = 1.1; s.halation = 0.25; s.bloom = 0.3; s.softness = 0.2; s.aberration = 0.2
+        s.flare = 0.4; s.vignette = 0.45
+        return s
+    }()
+
     static let silver: FilmStock = {
         var s = FilmStock(id: "silver", name: "Silver", iso: 100,
                           blurb: "Fine-grain monochrome. Smooth tones and bright skies.")
@@ -251,6 +323,19 @@ extension FilmStock {
         s.black = RGB(repeating: 0.045); s.white = RGB(0.97, 0.965, 0.95)
         s.grain = 0.4; s.halation = 0.2; s.halationTint = RGB(1, 1, 1); s.bloom = 0.3; s.softness = 0.3
         s.aberration = 0; s.flare = 0.4; s.vignette = 0.28
+        return s
+    }()
+
+    /// Warm-toned black & white: brown shadows, cream highlights.
+    static let umber: FilmStock = {
+        var s = FilmStock(id: "umber", name: "Umber", iso: 400,
+                          blurb: "Toned black & white. Warm brown shadows, cream highlights, soft grain.")
+        s.mono = RGB(0.40, 0.45, 0.15)
+        s.contrast = RGB(repeating: 0.78)
+        s.black = RGB(0.06, 0.045, 0.03); s.white = RGB(0.98, 0.93, 0.84)
+        s.shadowTint = RGB(0.03, 0.01, -0.02)
+        s.grain = 0.45; s.halation = 0.2; s.halationTint = RGB(1, 0.85, 0.65); s.bloom = 0.3; s.softness = 0.35
+        s.aberration = 0; s.flare = 0.4; s.vignette = 0.45
         return s
     }()
 

@@ -24,7 +24,8 @@ final class FilmCurveTests: XCTestCase {
     }
 
     func testMonochromeStocksAreNeutral() {
-        for stock in FilmStock.all where stock.isMonochrome {
+        // Neutral-paper monochromes only (toned ones, like Umber, are warm on purpose).
+        for stock in FilmStock.all where stock.isMonochrome && stock.white.x == stock.white.z {
             let y = LUT.transform(RGB(0.6, 0.2, 0.1), stock)
             XCTAssertEqual(y.x, y.y, accuracy: 0.03); XCTAssertEqual(y.y, y.z, accuracy: 0.03)
         }
@@ -44,6 +45,12 @@ final class FilmCurveTests: XCTestCase {
         XCTAssertEqual(a, LUT.cacheKey(.honey, expandSDR: false))
         XCTAssertNotEqual(a, LUT.cacheKey(.honey, expandSDR: true))
         XCTAssertNotEqual(a, LUT.cacheKey(FilmStock.honey.with(\.saturation, 0.5), expandSDR: false))
+    }
+
+    func testToneMonochromeIsWarm() {
+        let y = LUT.transform(RGB(repeating: 0.05), .umber)
+        XCTAssertGreaterThan(y.x, y.z, "Umber shadows should be warm")
+        XCTAssertEqual(Set(FilmStock.all.map(\.id)).count, FilmStock.all.count, "stock ids are unique")
     }
 
     func testStrengthScalesTexture() {
