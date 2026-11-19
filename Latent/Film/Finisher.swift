@@ -63,82 +63,196 @@ enum Finisher {
         return image.cgImage ?? cg
     }
 
-    /// A full-border 35mm scan, built to real film dimensions (the frame's short side = 24 mm): 5.5 mm rebates
-    /// with Kodak-standard perforations (2.79 × 1.98 mm, 4.75 mm pitch, 2 mm from the film edge), edge print in
-    /// the outer strip of one rebate, a dark film base with gentle unevenness, a soft rounded gate edge, and
-    /// scanner softness and grain over the whole border.
+    /// A full-border 35mm scan, built to real film dimensions (the frame's short side = 24 mm) and then roughed up
+    /// the way real scans are: slivers of the neighbouring frames, perforations that vary slightly in place and
+    /// brightness with scanner-lens fringing and glow, blotchy film-base density, hairline scratches and dust on the
+    /// base, edge print and DX code that fade unevenly, a slightly wavy gate edge, and the strip sitting a fraction
+    /// of a degree crooked in the holder. Fixed per frame by `rng`, so re-developing reproduces it.
     static func filmScan(_ cg: CGImage, stock: FilmStock, rng: inout SeededRandom, context: CIContext) -> CGImage {
+        let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
         let source = CIImage(cgImage: cg)
         let portrait = cg.height > cg.width
         // Lay the film horizontally; a portrait frame is rotated in, and the finished scan rotated back.
         var photo = portrait ? source.oriented(.left) : source
         photo = photo.transformed(by: CGAffineTransform(translationX: -photo.extent.minX, y: -photo.extent.minY))
-        let w = photo.extent.width, h = photo.extent.height
-        let mm = h / 24
-        let rebate = (5.5 * mm).rounded(), holder = (0.6 * mm).rounded(), gap = (2.2 * mm).rounded()
-        let size = CGSize(width: w + gap * 2, height: h + (rebate + holder) * 2)
-        let window = CGRect(x: gap, y: holder + rebate, width: w, height: h)   // same rect in UIKit and CI (symmetric)
+        guard let flat = context.createCGImage(photo, from: photo.extent, format: .RGBA8, colorSpace: sRGB) else { return cg }
+        let w = photo.extent.width, h = photo.extent.height, mm = h / 24
+        let rebate = (5.5 * mm).rounded(), holder = (1.0 * mm).rounded()
+        let frameGap = (1.7 * mm).rounded(), sliver = (2.0 * mm).rounded(), ends = frameGap + sliver
+        let size = CGSize(width: w + ends * 2, height: h + (rebate + holder) * 2)
+        let full = CGRect(origin: .zero, size: size)
+        let window = CGRect(x: ends, y: holder + rebate, width: w, height: h)   // same rect in UIKit and CI (symmetric)
 
-        let phase = CGFloat(rng.unit()), frameNo = 1 + Int(rng.unit() * 35)
-        let tilt = (CGFloat(rng.unit()), CGFloat(rng.unit()))
+        var r = rng
+        let phase = CGFloat(r.unit()), frameNo = 1 + Int(r.unit() * 35)
+        let tilt = (CGFloat(r.unit()), CGFloat(r.unit()))
         let layer = renderer(size).image { ctx in
             let c = ctx.cgContext
             // Scanner film holder, then the film base: near-black with a warm cast and slight unevenness.
-            UIColor(white: 0.015, alpha: 1).setFill(); c.fill(CGRect(origin: .zero, size: size))
+            UIColor(white: 0.012, alpha: 1).setFill(); c.fill(full)
             let film = CGRect(x: 0, y: holder, width: size.width, height: size.height - holder * 2)
-            let base = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB)!, colors: [
-                UIColor(red: 0.095, green: 0.075, blue: 0.062, alpha: 1).cgColor,
-                UIColor(red: 0.055, green: 0.044, blue: 0.038, alpha: 1).cgColor] as CFArray, locations: [0, 1])!
+            let base = CGGradient(colorsSpace: sRGB, colors: [
+                UIColor(red: 0.10, green: 0.078, blue: 0.064, alpha: 1).cgColor,
+                UIColor(red: 0.052, green: 0.042, blue: 0.037, alpha: 1).cgColor] as CFArray, locations: [0, 1])!
             c.saveGState(); c.clip(to: film)
             c.drawLinearGradient(base, start: CGPoint(x: size.width * tilt.0, y: 0), end: CGPoint(x: size.width * tilt.1, y: size.height),
                                  options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
             c.restoreGState()
 
-            // Perforations: light straight through the film, so near-white and slightly warm.
-            let holeW = 2.79 * mm, holeH = 1.98 * mm, pitch = 4.75 * mm, edge = 2.0 * mm
+            // Slivers of the neighbouring frames (mirrored copies, exposed a little differently).
+            for (frameRect, visible) in [
+                (CGRect(x: sliver - w, y: window.minY, width: w, height: h), CGRect(x: 0, y: window.minY, width: sliver, height: h)),
+                (CGRect(x: size.width - sliver, y: window.minY, width: w, height: h), CGRect(x: size.width - sliver, y: window.minY, width: sliver, height: h)),
+            ] {
+                c.saveGState()
+                c.clip(to: visible)
+                UIBezierPath(roundedRect: frameRect, cornerRadius: 0.35 * mm).addClip()
+                c.translateBy(x: frameRect.midX, y: frameRect.midY); c.scaleBy(x: -1, y: 1); c.translateBy(x: -frameRect.midX, y: -frameRect.midY)
+                UIImage(cgImage: flat).draw(in: frameRect)
+                UIColor(white: 0, alpha: r.range(0.12...0.45)).setFill(); c.fill(frameRect)
+                c.restoreGState()
+            }
+
+            // Perforations: light straight through the film. Each one sits and glows a little differently, with
+            // the scanner lens fringing red/cyan toward the strip's ends.
+            let holeW = 2.79 * mm, holeH = 1.98 * mm, pitch = 4.75 * mm, edge = 2.0 * mm, corner = 0.5 * mm
             let rows = [holder + edge, size.height - holder - edge - holeH]
-            UIColor(red: 0.88, green: 0.86, blue: 0.81, alpha: 1).setFill()
             var x = pitch * phase - pitch
             while x < size.width {
-                for y in rows { UIBezierPath(roundedRect: CGRect(x: x, y: y, width: holeW, height: holeH), cornerRadius: 0.5 * mm).fill() }
+                for y in rows {
+                    let rect = CGRect(x: x + CGFloat(r.range(-0.05...0.05)) * mm, y: y + CGFloat(r.range(-0.04...0.04)) * mm,
+                                      width: holeW, height: holeH)
+                    let fringe = (rect.midX - size.width / 2) / (size.width / 2) * 0.09 * mm
+                    UIColor(red: 0.95, green: 0.32, blue: 0.22, alpha: 0.45).setFill()
+                    UIBezierPath(roundedRect: rect.offsetBy(dx: fringe, dy: 0), cornerRadius: corner).fill()
+                    UIColor(red: 0.22, green: 0.62, blue: 0.95, alpha: 0.45).setFill()
+                    UIBezierPath(roundedRect: rect.offsetBy(dx: -fringe, dy: 0), cornerRadius: corner).fill()
+                    let v = r.range(0.78...0.93), warm = r.range(-0.015...0.035)
+                    UIColor(red: v + warm, green: v, blue: v - warm - 0.03, alpha: 1).setFill()
+                    UIBezierPath(roundedRect: rect, cornerRadius: corner).fill()
+                    if r.unit() < 0.12 {   // a fleck of dust caught in the hole
+                        let d = CGFloat(r.range(0.06...0.18)) * mm
+                        UIColor(white: 0.25, alpha: 0.6).setFill()
+                        c.fillEllipse(in: CGRect(x: rect.minX + rect.width * CGFloat(r.unit()), y: rect.minY + rect.height * CGFloat(r.unit()), width: d, height: d * 0.7))
+                    }
+                }
                 x += pitch
             }
 
-            // Edge print in the outer strip of the bottom rebate (between the film edge and the perforations).
+            // Edge print in the outer strip of the bottom rebate, each character fading a little differently.
             let font = UIFont.systemFont(ofSize: 1.0 * mm, weight: .medium, width: .condensed)
-            let attrs: [NSAttributedString.Key: Any] = [
-                .font: font, .foregroundColor: UIColor(red: 1.0, green: 0.74, blue: 0.36, alpha: 0.68), .kern: 0.14 * mm,
-            ]
             let stripMid = size.height - holder - edge / 2
-            func print(_ text: String, at x: CGFloat) {
-                let s = NSAttributedString(string: text, attributes: attrs)
-                s.draw(at: CGPoint(x: x, y: stripMid - s.size().height / 2))
+            func edgePrint(_ text: String, at x0: CGFloat) {
+                var x = x0
+                for ch in text {
+                    let glyph = NSAttributedString(string: String(ch), attributes: [
+                        .font: font, .foregroundColor: UIColor(red: 1.0, green: 0.74, blue: 0.36, alpha: r.range(0.42...0.72))])
+                    let sz = glyph.size()
+                    glyph.draw(at: CGPoint(x: x, y: stripMid - sz.height / 2 + CGFloat(r.range(-0.03...0.03)) * mm))
+                    x += sz.width + 0.14 * mm
+                }
             }
-            print("LATENT \(stock.name.uppercased()) \(stock.iso)", at: gap + w * 0.05)
-            print("\(frameNo)", at: gap + w * 0.47)
-            print("▸\(frameNo)A", at: gap + w * 0.86)
-        }
-        guard let layerCG = layer.cgImage else { return cg }
+            edgePrint("LATENT \(stock.name.uppercased()) \(stock.iso)", at: ends + w * CGFloat(r.range(0.03...0.08)))
+            edgePrint("\(frameNo)", at: ends + w * CGFloat(r.range(0.44...0.50)))
+            edgePrint("▸\(frameNo)A", at: ends + w * CGFloat(r.range(0.83...0.88)))
 
-        // Scanner softness and grain on the border, then the frame through a soft, slightly rounded gate.
-        let full = CGRect(origin: .zero, size: size)
-        var border = CIImage(cgImage: layerCG).clampedToExtent().applyingGaussianBlur(sigma: 0.06 * mm).cropped(to: full)
-        border = FilmPipeline.grain(on: border, stock: stock.with(\.grain, max(0.5, stock.grain)).with(\.grainSize, 1),
+            // DX code in the top rebate's outer strip.
+            var bx = ends + w * CGFloat(r.range(0.15...0.45))
+            for _ in 0..<22 {
+                let bw = (r.unit() < 0.5 ? 0.17 : 0.34) * mm
+                if r.unit() < 0.62 {
+                    UIColor(red: 1.0, green: 0.72, blue: 0.34, alpha: r.range(0.3...0.55)).setFill()
+                    c.fill(CGRect(x: bx, y: holder + edge * 0.25, width: bw, height: edge * 0.5))
+                }
+                bx += bw + 0.17 * mm
+            }
+
+            // Hairline scratches along the film and dust on the base.
+            c.setLineCap(.round)
+            for _ in 0..<(1 + Int(r.unit() * 3)) {
+                let y = film.minY + film.height * CGFloat(r.unit())
+                let x0 = size.width * CGFloat(r.range(0...0.5)), x1 = x0 + size.width * CGFloat(r.range(0.25...0.7))
+                c.setStrokeColor(UIColor(white: 1, alpha: r.range(0.05...0.13)).cgColor)
+                c.setLineWidth(CGFloat(r.range(0.02...0.05)) * mm)
+                c.move(to: CGPoint(x: x0, y: y)); c.addLine(to: CGPoint(x: x1, y: y + CGFloat(r.range(-0.2...0.2)) * mm)); c.strokePath()
+            }
+            for _ in 0..<(10 + Int(r.unit() * 16)) {
+                let p = CGPoint(x: size.width * CGFloat(r.unit()), y: film.minY + film.height * CGFloat(r.unit()))
+                guard !window.contains(p) else { continue }
+                let d = CGFloat(0.04 + pow(r.unit(), 3) * 0.2) * mm
+                UIColor(white: 1, alpha: r.range(0.2...0.6)).setFill()
+                c.fillEllipse(in: CGRect(x: p.x, y: p.y, width: d, height: d * 0.8))
+            }
+        }
+        guard let layerCG = layer.cgImage else { rng = r; return cg }
+
+        // Scanner light: perforations bloom into the base, the base density is blotchy, and everything is a touch soft.
+        var border = CIImage(cgImage: layerCG)
+        let glow = border.clampedToExtent().applyingGaussianBlur(sigma: 0.55 * mm).cropped(to: full)
+            .applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": CIVector(x: 0.22, y: 0, z: 0, w: 0), "inputGVector": CIVector(x: 0, y: 0.2, z: 0, w: 0),
+                "inputBVector": CIVector(x: 0, y: 0, z: 0.17, w: 0), "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1)])
+        border = FilmPipeline.add(glow, onto: border)
+        if let blotch = lowFrequency(size: size, cells: (28, 10), amplitude: 0.22, rng: &r) {
+            border = border.applyingFilter("CIMultiplyCompositing", parameters: [kCIInputBackgroundImageKey: blotch]).cropped(to: full)
+        }
+        border = border.clampedToExtent().applyingGaussianBlur(sigma: 0.07 * mm).cropped(to: full)
+        border = FilmPipeline.grain(on: border, stock: stock.with(\.grain, max(0.55, stock.grain)).with(\.grainSize, 1),
                                     user: 1, extent: full, short: h)
+
+        // The frame through a soft, slightly rounded and slightly wavy gate.
         let mask = renderer(size).image { ctx in
             UIColor.black.setFill(); ctx.fill(full)
             UIColor.white.setFill(); UIBezierPath(roundedRect: window, cornerRadius: 0.35 * mm).fill()
         }
-        guard let maskCG = mask.cgImage else { return cg }
-        let soft = CIImage(cgImage: maskCG).clampedToExtent().applyingGaussianBlur(sigma: 0.05 * mm).cropped(to: full)
+        guard let maskCG = mask.cgImage else { rng = r; return cg }
+        var gate = CIImage(cgImage: maskCG).clampedToExtent()
+        if let wobble = lowFrequency(size: size, cells: (120, 40), amplitude: 0.5, rng: &r) {
+            gate = gate.applyingFilter("CIDisplacementDistortion", parameters: [
+                "inputDisplacementImage": wobble.clampedToExtent(), kCIInputScaleKey: 0.22 * mm])
+                .transformed(by: CGAffineTransform(translationX: -0.11 * mm, y: -0.11 * mm))
+        }
+        let soft = gate.applyingGaussianBlur(sigma: 0.05 * mm).cropped(to: full)
         let blend = CIFilter.blendWithMask()
         blend.inputImage = photo.transformed(by: CGAffineTransform(translationX: window.minX, y: window.minY))
         blend.backgroundImage = border
         blend.maskImage = soft
-        guard var scan = blend.outputImage?.cropped(to: full) else { return cg }
+        guard var scan = blend.outputImage?.cropped(to: full) else { rng = r; return cg }
+
+        // The strip sits a fraction of a degree crooked in the holder.
+        let angle = CGFloat(r.range(-0.45...0.45)) * .pi / 180
+        let mid = CGPoint(x: full.midX, y: full.midY)
+        scan = scan.transformed(by: CGAffineTransform(translationX: mid.x, y: mid.y).rotated(by: angle).translatedBy(x: -mid.x, y: -mid.y))
+            .composited(over: CIImage(color: CIColor(red: 0.012, green: 0.012, blue: 0.012)).cropped(to: full))
+            .cropped(to: full)
+        rng = r
         if portrait { scan = scan.oriented(.right) }
         scan = scan.transformed(by: CGAffineTransform(translationX: -scan.extent.minX, y: -scan.extent.minY))
-        return context.createCGImage(scan, from: scan.extent, format: .RGBA8, colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!) ?? cg
+        return context.createCGImage(scan, from: scan.extent, format: .RGBA8, colorSpace: sRGB) ?? cg
+    }
+
+    /// Smooth random variation across `size`: a coarse grid of random values, upscaled and blurred, mapped to
+    /// 1 ± amplitude (for multiplying) — or, with amplitude 0.5, to 0…1 (for displacement).
+    private static func lowFrequency(size: CGSize, cells: (Int, Int), amplitude: Double, rng: inout SeededRandom) -> CIImage? {
+        let (cw, ch) = cells
+        var bytes = [UInt8](repeating: 255, count: cw * ch * 4)
+        for i in 0..<(cw * ch) {
+            bytes[i * 4] = UInt8(r: rng.unit()); bytes[i * 4 + 1] = UInt8(r: rng.unit()); bytes[i * 4 + 2] = UInt8(r: rng.unit())
+        }
+        let small = CIImage(bitmapData: Data(bytes), bytesPerRow: cw * 4, size: CGSize(width: cw, height: ch), format: .RGBA8, colorSpace: nil)
+        let sx = size.width / CGFloat(cw), sy = size.height / CGFloat(ch)
+        let smooth = small.clampedToExtent()
+            .transformed(by: CGAffineTransform(scaleX: sx, y: sy))
+            .applyingGaussianBlur(sigma: min(sx, sy) * 0.7)
+            .cropped(to: CGRect(origin: .zero, size: size))
+        let a = CGFloat(amplitude * 2)
+        let mono = amplitude != 0.5
+        return smooth.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: a, y: 0, z: 0, w: 0),
+            "inputGVector": mono ? CIVector(x: a, y: 0, z: 0, w: 0) : CIVector(x: 0, y: a, z: 0, w: 0),
+            "inputBVector": mono ? CIVector(x: a, y: 0, z: 0, w: 0) : CIVector(x: 0, y: 0, z: a, w: 0),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+            "inputBiasVector": mono ? CIVector(x: 1 - a / 2, y: 1 - a / 2, z: 1 - a / 2, w: 0) : CIVector(x: 0, y: 0, z: 0, w: 0)])
     }
 
     private static func drawDate(_ date: Date, in photo: CGRect, short: CGFloat) {
@@ -231,4 +345,8 @@ enum JPEGEncoder {
               let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [String: Any] else { return [:] }
         return props
     }
+}
+
+private extension UInt8 {
+    init(r: Double) { self = UInt8(Swift.max(0, Swift.min(255, (r * 255).rounded()))) }
 }
