@@ -5,6 +5,7 @@ struct CameraScreen: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var showSettings = false
     @State private var showRoll = false
+    @State private var showEditor = false   // debug: -openEditor
 
     var body: some View {
         @Bindable var model = model
@@ -51,6 +52,9 @@ struct CameraScreen: View {
         .persistentSystemOverlays(.hidden)
         .statusBarHidden()
         .sheet(isPresented: $showSettings) { SettingsView() }
+        .sheet(isPresented: $showEditor) {
+            NavigationStack { StockEditorView(custom: CustomStock.random(keeping: "custom-preview", name: "Test"), isNew: true) }
+        }
         .fullScreenCover(isPresented: $showRoll) { RollView(openLatest: true) }
         .fullScreenCover(isPresented: Binding(get: { !model.prefs.onboarded && !Self.automated }, set: { _ in })) {
             OnboardingView {
@@ -63,6 +67,7 @@ struct CameraScreen: View {
             #if DEBUG
             await model.developDemoRollIfRequested()
             if ProcessInfo.processInfo.arguments.contains("-openRoll") { showRoll = true }
+            if ProcessInfo.processInfo.arguments.contains("-openEditor") { showEditor = true }
             #endif
         }
         .onChange(of: scenePhase) { _, phase in model.isActive = phase == .active }
@@ -77,7 +82,7 @@ extension CameraScreen {
     /// Launched by a test or demo script: skip the introduction.
     static var automated: Bool {
         #if DEBUG
-        ProcessInfo.processInfo.arguments.contains { $0.hasPrefix("-demo") || $0 == "-openRoll" }
+        ProcessInfo.processInfo.arguments.contains { $0.hasPrefix("-demo") || $0.hasPrefix("-open") }
         #else
         false
         #endif

@@ -5,7 +5,8 @@ import UIKit
 // MARK: - Pipeline
 
 enum FilmPipeline {
-    static func apply(stock: FilmStock, to scene: CIImage, options: DevelopOptions, cube: Data, context: CIContext, labEV: Double = 0) -> CIImage {
+    static func apply(stock: FilmStock, to scene: CIImage, options: DevelopOptions, cube: Data, context: CIContext, labEV: Double = 0,
+                      cubeDimension: Int = LUT.dimension) -> CIImage {
         var img = crop(scene, to: options.aspect)
         let extent = img.extent
         let short = min(extent.width, extent.height)
@@ -23,7 +24,7 @@ enum FilmPipeline {
         // 3. Print through the stock's characteristic curves (3D LUT over +5.5 stops).
         let grade = CIFilter.colorCubeWithColorSpace()
         grade.inputImage = img.applyingFilter("CIExposureAdjust", parameters: [kCIInputEVKey: LUT.headroomEV])
-        grade.cubeDimension = Float(LUT.dimension)
+        grade.cubeDimension = Float(cubeDimension)
         grade.cubeData = cube
         grade.colorSpace = CGColorSpace(name: CGColorSpace.sRGB)
         img = grade.outputImage ?? img

@@ -16,10 +16,10 @@ enum HueBand: Int, CaseIterable { case red, yellow, green, cyan, blue, magenta }
 /// emulsion responds (a per-channel log-exposure S-curve, like a film characteristic curve), its
 /// colour rendering, and the optical/physical texture of the print. All looks are original.
 struct FilmStock: Identifiable, Hashable {
-    let id: String
-    let name: String
-    let iso: Int
-    let blurb: String
+    var id: String
+    var name: String
+    var iso: Int
+    var blurb: String
 
     /// Channel weights for monochrome stocks (nil = colour stock).
     var mono: RGB? = nil
@@ -100,7 +100,11 @@ extension FilmStock {
     static let all: [FilmStock] = [honey, coast, valley, pine, dusk, twilight, night, reel, sunny, cross, bypass, clear,
                                    silver, umber, noir]
 
-    static func with(id: String) -> FilmStock? { all.first { $0.id == id } }
+    /// Built-in and custom stocks.
+    static func with(id: String) -> FilmStock? { builtIn(id: id) ?? StockRegistry.stock(id: id) }
+    static func builtIn(id: String) -> FilmStock? { all.first { $0.id == id } }
+    /// Every stock the user can pick: built-ins, then their own.
+    static var available: [FilmStock] { all + StockRegistry.customs }
 
     /// Golden-hour colour negative: cream highlights, olive-teal shadows, glowing halation.
     static let honey: FilmStock = {

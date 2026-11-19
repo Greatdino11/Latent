@@ -73,6 +73,26 @@ actor Darkroom {
         return jpeg
     }
 
+    /// A quick, small print for the stock editor: the negative (or the test scene) scaled down, printed through a
+    /// coarse 25³ table that's built fresh each time and never cached.
+    func preview(negative: Data?, recipe: DevelopOptions?, stock: FilmStock, maxPixel: CGFloat = 900) throws -> CGImage {
+        var options = recipe ?? DevelopOptions()
+        let source: CIImage
+        if let negative, let stored = CIImage(data: negative) {
+            source = NegativeCodec.decode(stored, format: options.negativeFormat)
+        } else {
+            source = SimulatedScene.capture; options.sceneReferred = false; options.negativeFormat = nil
+        }
+        let long = max(source.extent.width, source.extent.height)
+        let small = try materialize(source.applyingFilter("CILanczosScaleTransform", parameters: [kCIInputScaleKey: min(1, maxPixel / long)]))
+        options.dateStamp = false; options.frame = .none; options.dust = nil
+        let cube = LUT.build(stock, expandSDR: !options.sceneReferred, dimension: 25)
+        let lab = options.sceneReferred ? labCorrection(small) : 0
+        let image = FilmPipeline.apply(stock: stock, to: small, options: options, cube: cube, context: context, labEV: lab, cubeDimension: 25)
+        guard let cg = context.createCGImage(image, from: image.extent, format: .RGBA8, colorSpace: sRGB) else { throw DarkroomError.render }
+        return cg
+    }
+
     /// Renders an image once into a GPU-resident half-float buffer (extended linear, so highlights above 1.0
     /// survive) and returns an image backed by it. ~8 bytes a pixel: ~100 MB for a 12MP frame, freed after the develop.
     private func materialize(_ image: CIImage) throws -> CIImage {

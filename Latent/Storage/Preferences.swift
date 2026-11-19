@@ -30,6 +30,13 @@ final class Preferences {
     var bigReveal: Bool { didSet { d.set(bigReveal, forKey: "bigReveal") } }
     /// Default look strength per stock id (0…1); missing = 1.
     var stockStrength: [String: Double] { didSet { d.set(stockStrength, forKey: "stockStrength") } }
+    /// Stocks the user made.
+    var customStocks: [CustomStock] {
+        didSet {
+            StockRegistry.set(customStocks)
+            d.set(try? JSONEncoder().encode(customStocks), forKey: "customStocks")
+        }
+    }
     /// The first-launch introduction has been shown.
     var onboarded: Bool { didSet { d.set(onboarded, forKey: "onboarded") } }
 
@@ -56,6 +63,9 @@ final class Preferences {
         saveOriginal = d.bool(forKey: "saveOriginal")
         showGrid = d.bool(forKey: "grid")
         showLevel = d.bool(forKey: "level")
+        let customs = d.data(forKey: "customStocks").flatMap { try? JSONDecoder().decode([CustomStock].self, from: $0) } ?? []
+        customStocks = customs
+        StockRegistry.set(customs)
         stockOrder = d.stringArray(forKey: "stockOrder") ?? FilmStock.all.map(\.id)
         hiddenStocks = Set(d.stringArray(forKey: "hidden") ?? [])
         randomPool = Set(d.stringArray(forKey: "randomPool") ?? [])
@@ -74,7 +84,7 @@ final class Preferences {
     /// All stocks in the user's order (new stocks appended).
     var orderedStocks: [FilmStock] {
         let known = stockOrder.compactMap(FilmStock.with(id:))
-        return known + FilmStock.all.filter { !stockOrder.contains($0.id) }
+        return known + FilmStock.available.filter { !stockOrder.contains($0.id) }
     }
 
     var visibleStocks: [FilmStock] { orderedStocks.filter { !hiddenStocks.contains($0.id) } }
@@ -97,6 +107,17 @@ final class Preferences {
     func toggleHidden(_ id: String) {
         if hiddenStocks.contains(id) { hiddenStocks.remove(id) } else { hiddenStocks.insert(id) }
         if hiddenStocks.contains(selectedStockID) { selectedStockID = FilmStock.randomID }
+    }
+
+    func save(_ custom: CustomStock) {
+        if let i = customStocks.firstIndex(where: { $0.id == custom.id }) { customStocks[i] = custom }
+        else { customStocks.append(custom) }
+    }
+
+    func delete(_ custom: CustomStock) {
+        customStocks.removeAll { $0.id == custom.id }
+        stockOrder.removeAll { $0 == custom.id }
+        if selectedStockID == custom.id { selectedStockID = FilmStock.randomID }
     }
 
     func toggleRandom(_ id: String) {

@@ -21,9 +21,8 @@ enum LUT {
         return "\(stock.id)-\(String(hash, radix: 16))"
     }
 
-    static func build(_ stock: FilmStock, expandSDR: Bool = false) -> Data {
+    static func build(_ stock: FilmStock, expandSDR: Bool = false, dimension d: Int = dimension) -> Data {
         let stock = expandSDR ? stock : stock.forRAW()
-        let d = dimension
         var buf = [Float](repeating: 0, count: d * d * d * 4)
         var axis = [Double](repeating: 0, count: d)
         for i in 0..<d {

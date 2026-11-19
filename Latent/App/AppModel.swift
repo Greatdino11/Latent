@@ -240,7 +240,7 @@ final class AppModel {
                 let rawLike = CIImage(data: data, options: [.applyOrientationProperty: true])?
                     .applyingFilter("CIExposureAdjust", parameters: [kCIInputEVKey: -1.3])
                 let isDNGFile = ["dng", "nef", "cr2", "cr3", "arw", "raf", "orf", "rw2"].contains(file.pathExtension.lowercased())
-                for stock in FilmStock.all where isDNGFile || !asRAW || ["honey", "coast", "pine", "valley"].contains(stock.id) {
+                for stock in FilmStock.available where isDNGFile || !asRAW || ["honey", "coast", "pine", "valley"].contains(stock.id) {
                     t = t.addingTimeInterval(1)
                     var options = currentOptions(for: stock); options.date = t
                     let isDNG = ["dng", "nef", "cr2", "cr3", "arw", "raf", "orf", "rw2"].contains(file.pathExtension.lowercased())

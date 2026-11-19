@@ -243,3 +243,35 @@ final class ScanCharacterTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(DevelopOptions.self, from: Data(#"{"frame":"film","date":1,"exposure":0,"grainAmount":1,"halation":true,"flare":true,"dateStamp":false,"sceneReferred":false}"#.utf8)).frame, .film)
     }
 }
+
+final class CustomStockTests: XCTestCase {
+    func testNeutralCustomStockMatchesBase() {
+        var c = CustomStock(); c.baseID = "coast"
+        let s = c.stock, base = FilmStock.coast
+        XCTAssertEqual(s.contrast, base.contrast); XCTAssertEqual(s.saturation, base.saturation)
+        XCTAssertEqual(s.black, base.black); XCTAssertEqual(s.grain, base.grain)
+        XCTAssertEqual(s.id, c.id); XCTAssertNotEqual(LUT.cacheKey(s, expandSDR: false), LUT.cacheKey(base, expandSDR: false))
+    }
+
+    func testAdjustmentsMoveTheRightWay() {
+        var c = CustomStock(); c.baseID = "clear"
+        c.warmth = 1; c.fade = 1; c.saturation = -1; c.grain = 2
+        let s = c.stock, base = FilmStock.clear
+        XCTAssertGreaterThan(s.temperature, base.temperature)
+        XCTAssertGreaterThan(s.black.x, base.black.x)
+        XCTAssertLessThan(s.saturation, base.saturation)
+        XCTAssertEqual(s.grain, base.grain * 2, accuracy: 1e-9)
+        let warm = LUT.transform(RGB(repeating: 0.18), s)
+        XCTAssertGreaterThan(warm.x, warm.z, "warmer stock prints grey warm")
+    }
+
+    func testRegistryResolvesCustomIDs() throws {
+        let c = CustomStock()
+        StockRegistry.set([c])
+        defer { StockRegistry.set([]) }
+        XCTAssertEqual(FilmStock.with(id: c.id)?.name, c.name)
+        XCTAssert(FilmStock.available.contains { $0.id == c.id })
+        let round = try JSONDecoder().decode([CustomStock].self, from: JSONEncoder().encode([c]))
+        XCTAssertEqual(round, [c])
+    }
+}

@@ -190,6 +190,32 @@ struct StockManagerView: View {
         let prefs = model.prefs
         List {
             Section {
+                ForEach(prefs.customStocks) { custom in
+                    NavigationLink {
+                        StockEditorView(custom: custom, isNew: false)
+                    } label: {
+                        HStack(spacing: 12) {
+                            HStack(spacing: 0) {
+                                ForEach(Array(LUT.chart.enumerated()), id: \.offset) { _, c in
+                                    let o = LUT.preview(c, custom.stock)
+                                    Rectangle().fill(Color(red: o.x, green: o.y, blue: o.z))
+                                }
+                            }
+                            .frame(width: 60, height: 10)
+                            .clipShape(RoundedRectangle(cornerRadius: 2))
+                            Text(custom.stock.displayName).font(Theme.mono(14, .bold))
+                        }
+                    }
+                }
+                NavigationLink {
+                    StockEditorView(custom: CustomStock(), isNew: true)
+                } label: {
+                    Label("New stock", systemImage: "plus.circle.fill").foregroundStyle(Theme.amber)
+                }
+            } header: { Text("Your stocks") } footer: {
+                Text("Start from any stock and adjust colour, contrast and texture with a live preview. Your stocks appear in the camera, Random and the roll.")
+            }
+            Section {
                 ForEach(prefs.orderedStocks) { stock in
                     let hidden = prefs.hiddenStocks.contains(stock.id)
                     let inPool = prefs.randomPool.contains(stock.id)
