@@ -63,6 +63,12 @@ actor Darkroom {
         return try print(scene, stock: stock, options: options, metadata: metadata, depth: depthImage, clock: &clock)
     }
 
+    /// Where auto-focus would put a frame's focus, from its stored depth map.
+    func autoFocus(depth: Data) -> Double? {
+        guard let image = CIImage(data: depth, options: [.colorSpace: NSNull()]) else { return nil }
+        return DepthMap.autoFocus(image, matte: nil, context: context)
+    }
+
     /// Saves a normalised depth map as an 8-bit grey PNG (stored values, no colour management) and returns the
     /// image read back from it, so the first print and every re-develop use identical depth.
     private func storeDepth(_ depth: CIImage) throws -> (image: CIImage, png: Data) {

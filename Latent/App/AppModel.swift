@@ -317,6 +317,31 @@ final class AppModel {
             }
             return
         }
+        // `-demoDepth`: real portrait negatives (Documents/DemoNegatives/<base>.neg.heic + .depth.png + .recipe.json)
+        // with every lens, at auto focus and at the near subject.
+        if args.contains("-demoDepth") {
+            let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("DemoNegatives")
+            let negs = ((try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [])
+                .filter { $0.lastPathComponent.hasSuffix(".neg.heic") }.sorted { $0.path < $1.path }
+            var t = Date()
+            for neg in negs {
+                let base = neg.lastPathComponent.replacingOccurrences(of: ".neg.heic", with: "")
+                guard let data = try? Data(contentsOf: neg), let depth = try? Data(contentsOf: dir.appendingPathComponent(base + ".depth.png")),
+                      let depthImage = CIImage(data: depth, options: [.colorSpace: NSNull()]) else { continue }
+                var recipe = (try? JSONDecoder().decode(DevelopOptions.self, from: Data(contentsOf: dir.appendingPathComponent(base + ".recipe.json")))) ?? DevelopOptions()
+                recipe.dateStamp = false; recipe.frame = .none; recipe.dust = nil; recipe.blurAmount = 0.6
+                let auto = DepthMap.autoFocus(depthImage, matte: nil, context: CIContext())
+                for lens in PortraitLens.allCases {
+                    for focus in [auto, 0.85] {
+                        t = t.addingTimeInterval(1)
+                        var o = recipe; o.portraitLens = lens; o.focusDepth = focus
+                        guard let jpeg = try? await Darkroom.shared.redevelop(negative: data, depth: depth, metadata: [:], stock: .pine, options: o) else { continue }
+                        try? roll.add(DevelopResult(jpeg: jpeg, negative: data, options: o), stock: .pine, filedAt: t)
+                    }
+                }
+            }
+            return
+        }
         guard args.contains("-demoRoll") else { return }
         for stock in FilmStock.all {
             await shoot(stock: stock, saveToPhotos: false)

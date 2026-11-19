@@ -427,6 +427,16 @@ private struct PhotoPager: View {
                 Text("far").font(.caption2).foregroundStyle(Theme.dim)
                 Slider(value: $focus, in: 0...1) { editing in if !editing, lens != nil { apply() } }
                 Text("near").font(.caption2).foregroundStyle(Theme.dim)
+                chip("AUTO", on: false) {
+                    guard let item, let depth = try? Data(contentsOf: item.depthURL) else { return }
+                    Task {
+                        if let f = await Darkroom.shared.autoFocus(depth: depth) {
+                            focus = f
+                            if lens == nil { lens = model.prefs.portraitLens }
+                            apply()
+                        }
+                    }
+                }
             }
             .padding(.horizontal, 18)
         }
