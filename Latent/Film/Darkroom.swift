@@ -1,5 +1,6 @@
 import CoreImage
 import CoreImage.CIFilterBuiltins
+import CoreVideo
 import ImageIO
 import UIKit
 
@@ -12,38 +13,78 @@ actor Darkroom {
     private var cubeOrder: [String] = []
     private let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
     private let p3 = CGColorSpace(name: CGColorSpace.displayP3)!
+    private let linear = CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!
 
     /// Develops a fresh capture and also returns its negative: the neutral scene in a 10-bit HEIF (see
     /// `NegativeCodec`), kept so the frame can be re-developed later.
     func develop(_ frame: CapturedFrame, stock: FilmStock, options: DevelopOptions) throws -> DevelopResult {
+        var clock = Stopwatch("develop \(stock.id)")
         var options = options
-        let (scene, sceneReferred) = try decode(frame)
+        let (decoded, sceneReferred) = try decode(frame)
+        // Decode once: the negative, lab exposure, flare detection and the print all read this buffer instead
+        // of each re-running the (expensive) RAW demosaic.
+        let scene = try materialize(decoded)
+        clock.lap("decode")
         options.sceneReferred = sceneReferred
         if frame.flashFired { options.flashFired = true }
         options.negativeFormat = NegativeCodec.current
-        let negative = try context.heif10Representation(of: NegativeCodec.encode(scene), colorSpace: p3, options: [:])
-        let jpeg = try print(scene, stock: stock, options: options, metadata: frame.metadata)
+        // Encode the negative (mostly the HEVC encoder) while the GPU prints, rather than one after the other.
+        let negativeDone = DispatchGroup()
+        var negativeResult: Result<Data, Error> = .failure(DarkroomError.encode)
+        let (ctx, p3, toStore) = (context, p3, NegativeCodec.encode(scene))
+        DispatchQueue.global(qos: .userInitiated).async(group: negativeDone) {
+            negativeResult = Result { try ctx.heif10Representation(of: toStore, colorSpace: p3, options: [:]) }
+        }
+        let jpeg = try print(scene, stock: stock, options: options, metadata: frame.metadata, clock: &clock)
+        negativeDone.wait()
+        let negative = try negativeResult.get()
+        clock.lap("negative (overlapped)")
+        clock.done()
         return DevelopResult(jpeg: jpeg, negative: negative, options: options)
     }
 
     /// Prints a stored negative again, on any stock.
     func redevelop(negative: Data, metadata: [String: Any], stock: FilmStock, options: DevelopOptions) throws -> Data {
         guard let stored = CIImage(data: negative) else { throw DarkroomError.decode }
-        let scene = NegativeCodec.decode(stored, format: options.negativeFormat)
-        return try print(scene, stock: stock, options: options, metadata: metadata)
+        var clock = Stopwatch("redevelop \(stock.id)")
+        let scene = try materialize(NegativeCodec.decode(stored, format: options.negativeFormat))
+        clock.lap("decode")
+        defer { clock.done() }
+        return try print(scene, stock: stock, options: options, metadata: metadata, clock: &clock)
     }
 
-    private func print(_ scene: CIImage, stock: FilmStock, options: DevelopOptions, metadata: [String: Any]) throws -> Data {
+    private func print(_ scene: CIImage, stock: FilmStock, options: DevelopOptions, metadata: [String: Any],
+                       clock: inout Stopwatch) throws -> Data {
         let strength = min(1, max(0, options.strength ?? 1))
         let cube = mixedCube(stock, strength: strength, expandSDR: !options.sceneReferred)
         let effective = stock.scaled(by: strength)
+        clock.lap("lut")
         let lab = options.sceneReferred ? labCorrection(scene) : 0
+        clock.lap("lab")
         let image = FilmPipeline.apply(stock: effective, to: scene, options: options, cube: cube, context: context, labEV: lab)
+        clock.lap("graph+flare")
         guard let cg = context.createCGImage(image, from: image.extent, format: .RGBA8, colorSpace: sRGB) else {
             throw DarkroomError.render
         }
+        clock.lap("render")
         let finished = Finisher.finish(cg, stock: stock, options: options)
-        return try JPEGEncoder.encode(finished, metadata: metadata)
+        let jpeg = try JPEGEncoder.encode(finished, metadata: metadata)
+        clock.lap("finish+jpeg")
+        return jpeg
+    }
+
+    /// Renders an image once into a GPU-resident half-float buffer (extended linear, so highlights above 1.0
+    /// survive) and returns an image backed by it. ~8 bytes a pixel: ~100 MB for a 12MP frame, freed after the develop.
+    private func materialize(_ image: CIImage) throws -> CIImage {
+        let e = image.extent.integral
+        let attrs: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
+                                      kCVPixelBufferMetalCompatibilityKey: true]
+        var buffer: CVPixelBuffer?
+        CVPixelBufferCreate(nil, Int(e.width), Int(e.height), kCVPixelFormatType_64RGBAHalf, attrs as CFDictionary, &buffer)
+        guard let buffer else { throw DarkroomError.render }
+        context.render(image.transformed(by: CGAffineTransform(translationX: -e.minX, y: -e.minY)), to: buffer,
+                       bounds: CGRect(origin: .zero, size: e.size), colorSpace: linear)
+        return CIImage(cvPixelBuffer: buffer, options: [.colorSpace: linear])
     }
 
     /// Printer correction, like a film lab: RAW frames are exposed to protect highlights, so a backlit scene comes
@@ -181,5 +222,28 @@ enum NegativeCodec {
         return stored
             .applyingFilter("CIGammaAdjust", parameters: ["inputPower": 1 / power])
             .applyingFilter("CIExposureAdjust", parameters: [kCIInputEVKey: -headroomEV])
+    }
+}
+
+/// Per-stage develop timings, printed when the app is launched with `-timing`.
+struct Stopwatch {
+    static let enabled = ProcessInfo.processInfo.arguments.contains("-timing")
+    private let name: String
+    private let start = Date()
+    private var last = Date()
+    private var parts: [String] = []
+
+    init(_ name: String) { self.name = name }
+
+    mutating func lap(_ label: String) {
+        guard Self.enabled else { return }
+        let now = Date()
+        parts.append("\(label) \(Int(now.timeIntervalSince(last) * 1000))ms")
+        last = now
+    }
+
+    func done() {
+        guard Self.enabled else { return }
+        print("TIMING \(name): \(Int(Date().timeIntervalSince(start) * 1000))ms — " + parts.joined(separator: ", "))
     }
 }

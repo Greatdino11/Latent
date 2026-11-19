@@ -118,12 +118,19 @@ final class AppModel {
     /// Develops photos picked from the library (RAW or regular) on the current stock, keeping their full frame.
     func importPhotos(_ picks: [PhotosPickerItem]) async {
         var done = 0, failed = 0
+        // Load the next photo from the library while the current one develops (one ahead, to bound memory).
+        func load(_ i: Int) -> Task<ImportedPhoto?, Error>? {
+            i < picks.count ? Task { try await picks[i].loadTransferable(type: ImportedPhoto.self) } : nil
+        }
+        var next = load(0)
         for (i, pick) in picks.enumerated() {
             importStatus = "Developing \(i + 1) of \(picks.count)…"
             developingCount += 1
             defer { developingCount -= 1 }
+            let current = next
+            next = load(i + 1)
             do {
-                guard let photo = try await pick.loadTransferable(type: ImportedPhoto.self) else { failed += 1; continue }
+                guard let photo = try await current?.value else { failed += 1; continue }
                 let stock = prefs.resolveStock()
                 let metadata = JPEGEncoder.metadata(of: photo.data)
                 var options = currentOptions(for: stock)
