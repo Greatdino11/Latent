@@ -13,6 +13,9 @@ final class Preferences {
     var flareAmount: Double { didSet { d.set(flareAmount, forKey: "flareAmount") } }
     var dateStamp: Bool { didSet { d.set(dateStamp, forKey: "dateStamp") } }
     var frameStyle: FrameStyle { didSet { d.set(frameStyle.rawValue, forKey: "frame") } }
+    /// Light leaks on new frames: 0 off, 0.5 subtle, 1 strong.
+    var lightLeak: Double { didSet { d.set(lightLeak, forKey: "lightLeak") } }
+    var dust: Bool { didSet { d.set(dust, forKey: "dust") } }
     var saveToPhotos: Bool { didSet { d.set(saveToPhotos, forKey: "saveToPhotos") } }
     var saveOriginal: Bool { didSet { d.set(saveOriginal, forKey: "saveOriginal") } }
     var showGrid: Bool { didSet { d.set(showGrid, forKey: "grid") } }
@@ -33,7 +36,7 @@ final class Preferences {
     init() {
         d.register(defaults: [
             "selectedStock": FilmStock.randomID, "aspect": AspectRatio.r3x2.rawValue, "grain": 1.0,
-            "halation": true, "flareAmount": 0.6, "dateStamp": false, "frame": FrameStyle.none.rawValue,
+            "halation": true, "flareAmount": 0.6, "dateStamp": false, "frame": FrameStyle.none.rawValue, "lightLeak": 0.0, "dust": false,
             "saveToPhotos": true, "saveOriginal": false, "grid": false, "level": true,
             "saveLocation": false, "haptics": true, "advanceSound": false, "bigReveal": false,
         ])
@@ -47,6 +50,8 @@ final class Preferences {
         flareAmount = d.double(forKey: "flareAmount")
         dateStamp = d.bool(forKey: "dateStamp")
         frameStyle = FrameStyle(rawValue: d.string(forKey: "frame") ?? "") ?? .none
+        lightLeak = d.double(forKey: "lightLeak")
+        dust = d.bool(forKey: "dust")
         saveToPhotos = d.bool(forKey: "saveToPhotos")
         saveOriginal = d.bool(forKey: "saveOriginal")
         showGrid = d.bool(forKey: "grid")

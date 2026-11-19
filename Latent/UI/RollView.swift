@@ -267,6 +267,8 @@ private struct PhotoPager: View {
     @State private var aspect: AspectRatio?
     @State private var dateStamp = false
     @State private var border: FrameStyle = .none
+    @State private var leak = 0.0
+    @State private var dust = false
     @State private var loadedFor = ""
 
     private var item: RollItem? { model.roll.item(id: selection) }
@@ -427,13 +429,19 @@ private struct PhotoPager: View {
                 }
                 .padding(.horizontal, 16)
             }
-            HStack(spacing: 8) {
-                chip(dateStamp ? "DATE ✓" : "DATE", on: dateStamp) { dateStamp.toggle(); apply() }
-                ForEach(FrameStyle.allCases) { f in
-                    chip(f == .none ? "NO BORDER" : "\(f.label.uppercased()) BORDER", on: border == f) { border = f; apply() }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    chip(leak == 0 ? "LEAK" : leak < 0.75 ? "LEAK ·" : "LEAK ··", on: leak > 0) {
+                        leak = leak == 0 ? 0.5 : leak < 0.75 ? 1 : 0; apply()
+                    }
+                    chip(dust ? "DUST ✓" : "DUST", on: dust) { dust.toggle(); apply() }
+                    chip(dateStamp ? "DATE ✓" : "DATE", on: dateStamp) { dateStamp.toggle(); apply() }
+                    ForEach(FrameStyle.allCases) { f in
+                        chip(f == .none ? "NO BORDER" : "\(f.label.uppercased()) BORDER", on: border == f) { border = f; apply() }
+                    }
                 }
+                .padding(.horizontal, 16)
             }
-            .padding(.horizontal, 16)
         }
     }
 
@@ -463,6 +471,8 @@ private struct PhotoPager: View {
         aspect = r.aspect
         dateStamp = r.dateStamp
         border = r.frame
+        leak = r.lightLeak ?? 0
+        dust = r.dust ?? false
         loadedFor = item.id
     }
 
@@ -475,10 +485,12 @@ private struct PhotoPager: View {
         dirty = false
         let stock = FilmStock.with(id: stockID) ?? item.stock
         let (s, p, a, d, b) = (strength, push, aspect, dateStamp, border)
+        let (lk, du) = (leak, dust)
         Task {
             do {
                 status = try await model.reprint(item, stock: stock) { o in
                     o.strength = s; o.pushPull = p; o.aspect = a; o.dateStamp = d; o.frame = b
+                    o.lightLeak = lk > 0 ? lk : nil; o.dust = du ? true : nil
                 }
             } catch {
                 status = error.localizedDescription

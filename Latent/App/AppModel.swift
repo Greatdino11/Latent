@@ -82,6 +82,8 @@ final class AppModel {
             date: Date()
         )
         o.strength = prefs.strength(for: stock)
+        if prefs.lightLeak > 0 { o.lightLeak = prefs.lightLeak }
+        if prefs.dust { o.dust = true }
         return o
     }
 

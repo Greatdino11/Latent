@@ -23,9 +23,25 @@ enum AspectRatio: String, CaseIterable, Identifiable, Codable {
 }
 
 enum FrameStyle: String, CaseIterable, Identifiable, Codable {
-    case none, white, black
+    case none, white, black, film
     var id: String { rawValue }
-    var label: String { rawValue.capitalized }
+    var label: String { self == .film ? "35mm" : rawValue.capitalized }
+}
+
+/// Small deterministic RNG (SplitMix64): the same photo always gets the same dust and light leak.
+struct SeededRandom {
+    private var state: UInt64
+    init(seed: UInt64) { state = seed &+ 0x9E3779B97F4A7C15 }
+    mutating func next() -> UInt64 {
+        state &+= 0x9E3779B97F4A7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
+        z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
+        return z ^ (z >> 31)
+    }
+    /// Uniform in 0..<1.
+    mutating func unit() -> Double { Double(next() >> 11) / Double(1 << 53) }
+    mutating func range(_ r: ClosedRange<Double>) -> Double { r.lowerBound + (r.upperBound - r.lowerBound) * unit() }
 }
 
 /// Everything about how a frame is printed except the stock. Saved beside each negative so it can be re-developed.
@@ -50,6 +66,13 @@ struct DevelopOptions: Codable {
     var flashFired: Bool? = nil
     /// How the negative file is encoded (see `NegativeCodec`); nil = the original 1/8-exposure format.
     var negativeFormat: Int? = nil
+    /// Light leak strength (0…1); nil = none.
+    var lightLeak: Double? = nil
+    /// Dust specks and hairline scratches from the "scan".
+    var dust: Bool? = nil
+
+    /// Fixed per frame, so dust and leaks come out the same every time it's developed.
+    var seed: UInt64 { UInt64(abs(date.timeIntervalSince1970 * 1000)) }
 }
 
 enum FrameSource {

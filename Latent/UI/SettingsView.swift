@@ -37,11 +37,17 @@ struct SettingsView: View {
                 } header: { Text("Texture") } footer: {
                     Text("Halation is the warm glow film gets around bright lights. Lens flare adds ghosts when the sun or a lamp is in frame. To apply new texture settings to an earlier frame, open it and choose Reprint from •••.")
                 }
-                Section("Finishing") {
+                Section {
                     Toggle("Date stamp", isOn: $prefs.dateStamp)
                     Picker("Print frame", selection: $prefs.frameStyle) {
                         ForEach(FrameStyle.allCases) { Text($0.label).tag($0) }
                     }
+                    Picker("Light leaks", selection: $prefs.lightLeak) {
+                        Text("Off").tag(0.0); Text("Subtle").tag(0.5); Text("Strong").tag(1.0)
+                    }
+                    Toggle("Dust & scratches", isOn: $prefs.dust)
+                } header: { Text("Finishing") } footer: {
+                    Text("35mm adds a film-scan border with sprocket holes and edge numbers. Leaks and dust are placed differently on every frame, and can be changed per photo in the roll (FRAME).")
                 }
                 Section {
                     Picker("Aspect ratio", selection: $prefs.aspect) {

@@ -78,6 +78,11 @@ enum FilmPipeline {
             img = v.outputImage ?? img
         }
 
+        // 9b. Light leak: light fogging the film from one edge.
+        if let leak = options.lightLeak, leak > 0 {
+            img = lightLeak(img, amount: leak, seed: options.seed, extent: extent, short: short)
+        }
+
         // 10. Grain last, on top of everything, like real silver.
         img = grain(on: img, stock: stock, user: options.grainAmount, extent: extent, short: short)
 
@@ -235,6 +240,37 @@ enum FilmPipeline {
         return CIImage(bitmapData: data, bytesPerRow: w * 4, size: CGSize(width: w, height: h), format: .RGBA8, colorSpace: nil)
             .settingAlphaOne(in: CGRect(x: 0, y: 0, width: w, height: h))
             .transformed(by: CGAffineTransform(translationX: rect.minX, y: rect.minY))
+    }
+
+    /// A warm fog of light spilling in from one edge (which edge and where is fixed per frame by `seed`).
+    static func lightLeak(_ img: CIImage, amount: Double, seed: UInt64, extent: CGRect, short: CGFloat) -> CIImage {
+        var rng = SeededRandom(seed: seed ^ 0x51ED_1EAC)
+        let edge = Int(rng.unit() * 4)
+        let along = CGFloat(rng.range(0.15...0.85))
+        let reach = short * CGFloat(rng.range(0.8...1.2))
+        let p: CGPoint
+        switch edge {
+        case 0: p = CGPoint(x: extent.minX - short * 0.12, y: extent.minY + extent.height * along)
+        case 1: p = CGPoint(x: extent.maxX + short * 0.12, y: extent.minY + extent.height * along)
+        case 2: p = CGPoint(x: extent.minX + extent.width * along, y: extent.minY - short * 0.12)
+        default: p = CGPoint(x: extent.minX + extent.width * along, y: extent.maxY + short * 0.12)
+        }
+        let linear = CGColorSpace(name: CGColorSpace.linearSRGB)!
+        func glow(_ c: RGB, _ a: Double, radius: CGFloat) -> CIImage? {
+            let g = CIFilter.radialGradient()
+            g.center = p; g.radius0 = 0; g.radius1 = Float(radius)
+            g.color0 = CIColor(red: c.x * a, green: c.y * a, blue: c.z * a, alpha: 1, colorSpace: linear) ?? .black
+            g.color1 = CIColor(red: 0, green: 0, blue: 0, alpha: 1, colorSpace: linear) ?? .black
+            return g.outputImage
+        }
+        guard let wide = glow(RGB(1.0, 0.30, 0.07), amount * 0.78, radius: reach),
+              let hot = glow(RGB(1.0, 0.70, 0.32), amount * 0.6, radius: reach * 0.38) else { return img }
+        // Stretch along the edge so it reads as a streak, not a disc.
+        let stretch: CGAffineTransform = edge < 2
+            ? CGAffineTransform(translationX: p.x, y: p.y).scaledBy(x: 1, y: 1.9).translatedBy(x: -p.x, y: -p.y)
+            : CGAffineTransform(translationX: p.x, y: p.y).scaledBy(x: 1.9, y: 1).translatedBy(x: -p.x, y: -p.y)
+        let light = add(hot, onto: wide).transformed(by: stretch).cropped(to: extent)
+        return add(light, onto: img)
     }
 
     static func grain(on img: CIImage, stock: FilmStock, user: Double, extent: CGRect, short: CGFloat) -> CIImage {

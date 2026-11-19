@@ -212,3 +212,34 @@ final class EdgeTests: XCTestCase {
         }
     }
 }
+
+final class ScanCharacterTests: XCTestCase {
+    func testSeededRandomIsDeterministic() {
+        var a = SeededRandom(seed: 42), b = SeededRandom(seed: 42), c = SeededRandom(seed: 43)
+        let xs = (0..<5).map { _ in a.unit() }
+        XCTAssertEqual(xs, (0..<5).map { _ in b.unit() })
+        XCTAssertNotEqual(xs, (0..<5).map { _ in c.unit() })
+        XCTAssert(xs.allSatisfy { (0..<1).contains($0) })
+    }
+
+    /// 35mm border: sprocket bands go on the long sides, and edges are whole pixels with no unpainted sliver.
+    func testFilmBorderLayout() {
+        for (w, h) in [(4032, 2688), (2688, 4032)] {
+            let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+            ctx.setFillColor(gray: 0.5, alpha: 1); ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+            var o = DevelopOptions(); o.frame = .film; o.dust = true
+            let out = Finisher.finish(ctx.makeImage()!, stock: .reel, options: o)
+            let addedW = out.width - w, addedH = out.height - h
+            if w > h { XCTAssertGreaterThan(addedH, addedW, "landscape: rebate top/bottom") }
+            else { XCTAssertGreaterThan(addedW, addedH, "portrait: rebate left/right") }
+        }
+    }
+
+    func testOldRecipesDecodeWithoutScanFields() throws {
+        let json = #"{"exposure":0,"aspect":"3:2","grainAmount":1,"halation":true,"flare":true,"dateStamp":false,"frame":"none","date":800000000,"sceneReferred":true}"#
+        let r = try JSONDecoder().decode(DevelopOptions.self, from: Data(json.utf8))
+        XCTAssertNil(r.lightLeak); XCTAssertNil(r.dust)
+        XCTAssertEqual(try JSONDecoder().decode(DevelopOptions.self, from: Data(#"{"frame":"film","date":1,"exposure":0,"grainAmount":1,"halation":true,"flare":true,"dateStamp":false,"sceneReferred":false}"#.utf8)).frame, .film)
+    }
+}
