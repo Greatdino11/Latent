@@ -1,41 +1,51 @@
 import CoreImage
 import CoreImage.CIFilterBuiltins
 
-/// Depth-based background blur with a few lens characters. `depth` is a normalised grey map (near = 1) already
-/// fitted and cropped to the frame; `focus` is the depth that stays sharp.
+/// Depth-based background blur with a few lens characters. `depth` is the frame's normalised depth map at its own
+/// (low) resolution, cropped like the frame (near = 1); `focus` is the depth that stays sharp.
+///
+/// Three things keep it from looking fake: the depth map is upsampled against the photo so the sharp/blurred
+/// boundary follows real edges; the background is blurred only from background pixels (a normalised blur), so the
+/// sharp subject never smears into the blur behind it; and Swirl is a smooth rotational smear of that background
+/// rather than overlapping copies.
 enum Portrait {
     static func blur(_ img: CIImage, depth: CIImage, lens: PortraitLens, amount: Double, focus: Double,
                      extent: CGRect, short: CGFloat) -> CIImage {
-        guard let mask = blurMask(depth, focus: focus, extent: extent, short: short) else { return img }
+        let refined = upsample(depth, guide: img, extent: extent)
+        guard let mask = blurMask(refined, focus: focus, extent: extent, short: short) else { return img }
         let a = CGFloat(min(1, max(0, amount)))
-        let base = img.clampedToExtent()
         let blurred: CIImage?
         switch lens {
         case .classic:
-            blurred = masked(base, mask: mask, radius: a * short * 0.03)
+            blurred = backgroundBlur(img, weight: mask, extent: extent) { masked($0, mask: mask, radius: a * short * 0.028) }
         case .bubble:
-            // Soap-bubble bokeh: bright rims on out-of-focus highlights. Rendered at half size (it's costly).
-            let half = base.transformed(by: CGAffineTransform(scaleX: 0.5, y: 0.5))
-                .cropped(to: CGRect(x: extent.minX / 2 - 64, y: extent.minY / 2 - 64, width: extent.width / 2 + 128, height: extent.height / 2 + 128))
-            let b = CIFilter.bokehBlur()
-            b.inputImage = half
-            b.radius = Float(a * short * 0.014); b.ringAmount = 0.75; b.ringSize = 0.16; b.softness = 0.6
-            blurred = b.outputImage?.transformed(by: CGAffineTransform(scaleX: 2, y: 2))
+            // Ring bokeh, rendered at half size (it's costly) and scaled back.
+            let r = Float(a * short * 0.013)
+            blurred = backgroundBlur(img, weight: mask, extent: extent) { image in
+                let half = image.transformed(by: CGAffineTransform(scaleX: 0.5, y: 0.5))
+                    .cropped(to: CGRect(x: -64, y: -64, width: extent.width / 2 + 128, height: extent.height / 2 + 128))
+                let b = CIFilter.bokehBlur()
+                b.inputImage = half; b.radius = r; b.ringAmount = 0.7; b.ringSize = 0.15; b.softness = 0.6
+                return b.outputImage?.transformed(by: CGAffineTransform(scaleX: 2, y: 2))
+            }
         case .swirl:
-            // Swirly bokeh: average a few slightly rotated copies, so blur runs around the frame and grows
-            // toward the edges, like an old Petzval-style lens.
-            guard let soft = masked(base, mask: mask, radius: a * short * 0.018) else { return img }
+            // A soft background blur, then a rotational smear about the centre (Gaussian-weighted, so no double
+            // images) — the arc grows toward the edges, like the swirling bokeh of an old Petzval lens.
+            guard let soft = backgroundBlur(img, weight: mask, extent: extent, blur: { masked($0, mask: mask, radius: a * short * 0.016) })
+            else { return img }
             let c = CGPoint(x: extent.midX, y: extent.midY)
-            let steps = 9, spread = Double(a) * 0.12            // radians end to end
-            var sum: CIImage?
+            let steps = 15, spread = Double(a) * 0.075
+            var sum: CIImage?, total = 0.0
+            let weights = (0..<steps).map { i -> Double in let t = Double(i) / Double(steps - 1) - 0.5; return exp(-t * t * 8) }
+            total = weights.reduce(0, +)
             for i in 0..<steps {
                 let angle = CGFloat(spread * (Double(i) / Double(steps - 1) - 0.5))
-                let turned = soft.transformed(by: CGAffineTransform(translationX: c.x, y: c.y).rotated(by: angle).translatedBy(x: -c.x, y: -c.y))
-                let part = turned.applyingFilter("CIColorMatrix", parameters: [
-                    "inputRVector": CIVector(x: 1 / CGFloat(steps), y: 0, z: 0, w: 0),
-                    "inputGVector": CIVector(x: 0, y: 1 / CGFloat(steps), z: 0, w: 0),
-                    "inputBVector": CIVector(x: 0, y: 0, z: 1 / CGFloat(steps), w: 0),
-                    "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1)])
+                let k = CGFloat(weights[i] / total)
+                let part = soft.clampedToExtent()
+                    .transformed(by: CGAffineTransform(translationX: c.x, y: c.y).rotated(by: angle).translatedBy(x: -c.x, y: -c.y))
+                    .applyingFilter("CIColorMatrix", parameters: [
+                        "inputRVector": CIVector(x: k, y: 0, z: 0, w: 0), "inputGVector": CIVector(x: 0, y: k, z: 0, w: 0),
+                        "inputBVector": CIVector(x: 0, y: 0, z: k, w: 0), "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1)])
                 sum = sum.map { FilmPipeline.add(part, onto: $0) } ?? part
             }
             blurred = sum
@@ -48,9 +58,44 @@ enum Portrait {
         return blend.outputImage?.cropped(to: extent) ?? img
     }
 
-    /// 0 where the depth matches `focus`, rising to 1 away from it, softened so edges don't halo.
+    /// The low-res depth map brought up to the photo's size, following the photo's own edges.
+    static func upsample(_ depth: CIImage, guide: CIImage, extent: CGRect) -> CIImage {
+        let de = depth.extent
+        if let f = CIFilter(name: "CIEdgePreserveUpsampleFilter") {
+            f.setValue(guide.applyingFilter("CILinearToSRGBToneCurve").cropped(to: extent), forKey: kCIInputImageKey)
+            f.setValue(depth, forKey: "inputSmallImage")
+            f.setValue(4.0, forKey: "inputSpatialSigma")
+            f.setValue(0.12, forKey: "inputLumaSigma")
+            if let out = f.outputImage { return out.cropped(to: extent) }
+        }
+        return depth.transformed(by: CGAffineTransform(scaleX: extent.width / de.width, y: extent.height / de.height)).cropped(to: extent)
+    }
+
+    /// Blurs `img` using only the pixels `weight` marks as background: blur(img·w) ÷ blur(w). Where almost no
+    /// background is in reach, it falls back to a plain blur (those pixels stay sharp in the final blend anyway).
+    static func backgroundBlur(_ img: CIImage, weight: CIImage, extent: CGRect, blur: (CIImage) -> CIImage?) -> CIImage? {
+        let w = weight.clampedToExtent()
+        guard let weighted = CIFilter(name: "CIMultiplyCompositing", parameters: [kCIInputImageKey: w, kCIInputBackgroundImageKey: img.clampedToExtent()])?.outputImage,
+              let num = blur(weighted), let den = blur(w), let plain = blur(img.clampedToExtent()) else { return nil }
+        let safe = den.applyingFilter("CIColorClamp", parameters: ["inputMinComponents": CIVector(x: 0.002, y: 0.002, z: 0.002, w: 1),
+                                                                  "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)])
+        let divide = CIFilter.divideBlendMode()        // background ÷ input
+        divide.inputImage = safe; divide.backgroundImage = num
+        guard let normalised = divide.outputImage else { return plain }
+        let trust = den.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: 6, y: 0, z: 0, w: 0), "inputGVector": CIVector(x: 6, y: 0, z: 0, w: 0),
+            "inputBVector": CIVector(x: 6, y: 0, z: 0, w: 0), "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1)])
+            .applyingFilter("CIColorClamp", parameters: ["inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 1),
+                                                        "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)])
+        let mix = CIFilter.blendWithMask()
+        mix.inputImage = normalised; mix.backgroundImage = plain; mix.maskImage = trust
+        return mix.outputImage?.cropped(to: extent)
+    }
+
+    /// 0 where the depth matches `focus`, rising to 1 away from it. Only lightly softened: the edge-aware depth
+    /// already follows object outlines, and more softening would bring the halo back.
     static func blurMask(_ depth: CIImage, focus: Double, extent: CGRect, short: CGFloat) -> CIImage? {
-        let f = CGFloat(focus), dead: CGFloat = 0.07, gain: CGFloat = 3.4
+        let f = CGFloat(focus), dead: CGFloat = 0.08, gain: CGFloat = 4.0
         func shifted(_ sign: CGFloat) -> CIImage? {
             let m = CIFilter.colorMatrix(); m.inputImage = depth
             let v = CIVector(x: sign, y: 0, z: 0, w: 0)
@@ -70,12 +115,12 @@ enum Portrait {
         m.biasVector = CIVector(x: -dead * gain, y: -dead * gain, z: -dead * gain, w: 0)
         let c = CIFilter.colorClamp(); c.inputImage = m.outputImage
         c.minComponents = CIVector(x: 0, y: 0, z: 0, w: 1); c.maxComponents = CIVector(x: 1, y: 1, z: 1, w: 1)
-        return c.outputImage?.clampedToExtent().applyingGaussianBlur(sigma: short * 0.008).cropped(to: extent)
+        return c.outputImage?.clampedToExtent().applyingGaussianBlur(sigma: short * 0.0015).cropped(to: extent)
     }
 
     private static func masked(_ image: CIImage, mask: CIImage, radius: CGFloat) -> CIImage? {
         let f = CIFilter.maskedVariableBlur()
-        f.inputImage = image; f.mask = mask.clampedToExtent(); f.radius = Float(radius)
+        f.inputImage = image.clampedToExtent(); f.mask = mask.clampedToExtent(); f.radius = Float(radius)
         return f.outputImage
     }
 }

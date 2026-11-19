@@ -17,13 +17,15 @@ enum FilmPipeline {
 
         // Portrait blur in scene light, so out-of-focus highlights bloom into proper bokeh.
         if let lens = options.portraitLens, let depth, (options.blurAmount ?? 0.6) > 0.01 {
+            // Crop the (small) depth map the same way as the frame, keeping its own resolution: the blur
+            // upsamples it against the photo so its edges follow real object edges.
             let d = scene.extent, de = depth.extent
-            let fitted = depth
-                .transformed(by: CGAffineTransform(translationX: -de.minX, y: -de.minY))
-                .transformed(by: CGAffineTransform(scaleX: d.width / de.width, y: d.height / de.height))
-                .transformed(by: CGAffineTransform(translationX: d.minX, y: d.minY))
-            let cropped = crop(fitted, to: options.aspect)
-            img = Portrait.blur(img, depth: cropped, lens: lens, amount: options.blurAmount ?? 0.6,
+            let r = cropRect(d, to: options.aspect)
+            let kx = de.width / d.width, ky = de.height / d.height
+            let small = CGRect(x: de.minX + (r.minX - d.minX) * kx, y: de.minY + (r.minY - d.minY) * ky,
+                               width: r.width * kx, height: r.height * ky)
+            let depthSmall = depth.cropped(to: small).transformed(by: CGAffineTransform(translationX: -small.minX, y: -small.minY))
+            img = Portrait.blur(img, depth: depthSmall, lens: lens, amount: options.blurAmount ?? 0.6,
                                 focus: options.focusDepth ?? 0.8, extent: extent, short: short)
         }
 
@@ -112,16 +114,18 @@ enum FilmPipeline {
 
     /// Centre-crop to the aspect ratio, matching the frame's own orientation.
     static func crop(_ image: CIImage, to aspect: AspectRatio?) -> CIImage {
-        let e = image.extent
-        guard let aspect else {
-            return image.transformed(by: CGAffineTransform(translationX: -e.minX, y: -e.minY))
-        }
+        let rect = cropRect(image.extent, to: aspect)
+        return image.cropped(to: rect).transformed(by: CGAffineTransform(translationX: -rect.minX, y: -rect.minY))
+    }
+
+    /// The centred rectangle of `e` with the aspect ratio (in the frame's own orientation); `e` itself for nil.
+    static func cropRect(_ e: CGRect, to aspect: AspectRatio?) -> CGRect {
+        guard let aspect else { return e }
         let portrait = e.height > e.width
         let target = portrait ? 1 / aspect.longOverShort : aspect.longOverShort   // width / height
         var w = e.width, h = e.height
         if w / h > target { w = (h * target).rounded() } else { h = (w / target).rounded() }
-        let rect = CGRect(x: e.midX - w / 2, y: e.midY - h / 2, width: w, height: h).integral
-        return image.cropped(to: rect).transformed(by: CGAffineTransform(translationX: -rect.minX, y: -rect.minY))
+        return CGRect(x: e.midX - w / 2, y: e.midY - h / 2, width: w, height: h).integral
     }
 
     /// Additive blend that keeps the background's alpha.

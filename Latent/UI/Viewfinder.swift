@@ -89,7 +89,9 @@ private struct AspectMask: View {
     var body: some View {
         GeometryReader { geo in
             Path { p in
-                p.addRect(CGRect(origin: .zero, size: geo.size))
+                // Overshoot the edges: a fractional viewfinder width otherwise leaves the last pixel column only
+                // half covered, and the live preview shows through as a bright line. `.clipped()` trims the excess.
+                p.addRect(CGRect(origin: .zero, size: geo.size).insetBy(dx: -4, dy: -4))
                 p.addRect(frame)
             }
             .fill(Color.black.opacity(0.88), style: FillStyle(eoFill: true))

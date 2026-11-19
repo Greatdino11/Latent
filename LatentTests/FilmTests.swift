@@ -296,6 +296,21 @@ final class PortraitTests: XCTestCase {
         XCTAssertGreaterThan(value(mask, at: CGPoint(x: 360, y: 200)), 0.95, "far side is fully blurred")
     }
 
+    /// The sharp subject must not smear into the blurred background beside it.
+    func testBackgroundBlurDoesNotBleedSubject() throws {
+        let e = CGRect(x: 0, y: 0, width: 400, height: 200)
+        let lin = CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!
+        let red = CIImage(color: CIColor(red: 1, green: 0, blue: 0, alpha: 1, colorSpace: lin)!).cropped(to: CGRect(x: 0, y: 0, width: 200, height: 200))
+        let img = red.composited(over: CIImage(color: CIColor(red: 0, green: 0, blue: 1, alpha: 1, colorSpace: lin)!).cropped(to: e))
+        let bg = CIImage(color: .white).cropped(to: CGRect(x: 200, y: 0, width: 200, height: 200))
+        let weight = bg.composited(over: CIImage(color: .black).cropped(to: e))   // 1 = background (right half)
+        let out = try XCTUnwrap(Portrait.backgroundBlur(img, weight: weight, extent: e) { $0.applyingGaussianBlur(sigma: 20) })
+        let plain = img.clampedToExtent().applyingGaussianBlur(sigma: 20)
+        let p = CGPoint(x: 212, y: 100)
+        XCTAssertLessThan(value(out, at: p), 0.03, "no red from the subject in the background blur")
+        XCTAssertGreaterThan(value(plain, at: p), 0.2, "a plain blur does bleed (sanity check)")
+    }
+
     func testRecipeCarriesPortraitFields() throws {
         var o = DevelopOptions(); o.portraitLens = .swirl; o.blurAmount = 0.4; o.focusDepth = 0.7
         let back = try JSONDecoder().decode(DevelopOptions.self, from: JSONEncoder().encode(o))

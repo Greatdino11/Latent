@@ -258,11 +258,17 @@ final class AppModel {
                 let isDNGFile = ["dng", "nef", "cr2", "cr3", "arw", "raf", "orf", "rw2"].contains(file.pathExtension.lowercased())
                 // `-demoPortrait`: a synthetic depth map (near in the middle) and each lens, on Honey.
                 if args.contains("-demoPortrait"), let probe = CIImage(data: data, options: [.applyOrientationProperty: true]) {
-                    let e = probe.extent, short = min(e.width, e.height)
-                    let g = CIFilter(name: "CIRadialGradient", parameters: [
-                        "inputCenter": CIVector(x: e.midX, y: e.midY * 0.9), "inputRadius0": short * 0.16, "inputRadius1": short * 0.62,
-                        "inputColor0": CIColor(red: 1, green: 1, blue: 1), "inputColor1": CIColor(red: 0.1, green: 0.1, blue: 0.1)])!
-                    let depth = g.outputImage!.cropped(to: e)
+                    // Subject = warm, saturated pixels (red well above green): a sharp-edged "near" region, stored at
+                    // the iPhone's depth-map resolution (768 px wide) so upsampling artefacts show up as on device.
+                    let e = probe.extent
+                    let warm = probe.applyingFilter("CIColorMatrix", parameters: [
+                        "inputRVector": CIVector(x: 5, y: -5, z: 0, w: 0), "inputGVector": CIVector(x: 5, y: -5, z: 0, w: 0),
+                        "inputBVector": CIVector(x: 5, y: -5, z: 0, w: 0), "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+                        "inputBiasVector": CIVector(x: 0.15, y: 0.15, z: 0.15, w: 0)])
+                        .applyingFilter("CIColorClamp", parameters: ["inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 1),
+                                                                    "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)])
+                    let k = 768 / e.width
+                    let depth = warm.transformed(by: CGAffineTransform(scaleX: k, y: k)).cropped(to: CGRect(x: 0, y: 0, width: 768, height: (e.height * k).rounded()))
                     for lens in PortraitLens.allCases {
                         t = t.addingTimeInterval(1)
                         var options = currentOptions(for: .honey); options.date = t
