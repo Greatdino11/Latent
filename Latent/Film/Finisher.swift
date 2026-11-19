@@ -1,72 +1,144 @@
+import CoreImage
+import CoreImage.CIFilterBuiltins
 import ImageIO
 import UIKit
 import UniformTypeIdentifiers
 
-// MARK: - Finishing (dust, date stamp, print border, 35mm scan border)
+// MARK: - Finishing (dust, date stamp, print border, 35mm scan)
 
 enum Finisher {
-    static func finish(_ cg: CGImage, stock: FilmStock, options: DevelopOptions) -> CGImage {
+    static func finish(_ cg: CGImage, stock: FilmStock, options: DevelopOptions, context: CIContext? = nil) -> CGImage {
         let dust = options.dust == true
         guard options.dateStamp || options.frame != .none || dust else { return cg }
-        let w = CGFloat(cg.width), h = CGFloat(cg.height), short = min(w, h)
-        let portrait = h > w
         var rng = SeededRandom(seed: options.seed)
-
-        // Insets around the photo, in whole pixels (a fractional canvas leaves an unpainted dark edge).
-        var inset = (left: CGFloat(0), right: CGFloat(0), top: CGFloat(0), bottom: CGFloat(0))
+        var photo = cg
+        if dust || options.dateStamp { photo = decorate(cg, dust: dust, date: options.dateStamp ? options.date : nil, rng: &rng) }
         switch options.frame {
-        case .none: break
-        case .white, .black:
-            let border = (short * 0.045).rounded(), footer = (short * 0.09).rounded()
-            inset = (border, border, border, border + footer)
-        case .film:
-            // 35mm: sprocket rebate along the long sides, a thin margin on the short sides.
-            let rebate = (short * 0.11).rounded(), side = (short * 0.03).rounded()
-            inset = portrait ? (rebate, rebate, side, side) : (side, side, rebate, rebate)
+        case .none: return photo
+        case .white, .black: return printBorder(photo, stock: stock, black: options.frame == .black)
+        case .film: return filmScan(photo, stock: stock, rng: &rng, context: context ?? CIContext(options: [.cacheIntermediates: false]))
         }
-        let size = CGSize(width: w + inset.left + inset.right, height: h + inset.top + inset.bottom)
+    }
 
+    private static func renderer(_ size: CGSize) -> UIGraphicsImageRenderer {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1; format.opaque = true; format.preferredRange = .standard
-        let image = UIGraphicsImageRenderer(size: size, format: format).image { ctx in
-            let paper: UIColor = switch options.frame {
-            case .black: UIColor(white: 0.06, alpha: 1)
-            case .film: UIColor(red: 0.07, green: 0.055, blue: 0.045, alpha: 1)
-            default: UIColor(white: 0.97, alpha: 1)
-            }
-            paper.setFill(); ctx.fill(CGRect(origin: .zero, size: size))
-            let photo = CGRect(x: inset.left, y: inset.top, width: w, height: h)
+        return UIGraphicsImageRenderer(size: size, format: format)
+    }
+
+    /// Dust and the date stamp, drawn on the photo itself.
+    private static func decorate(_ cg: CGImage, dust: Bool, date: Date?, rng: inout SeededRandom) -> CGImage {
+        let w = CGFloat(cg.width), h = CGFloat(cg.height), short = min(w, h)
+        let photo = CGRect(x: 0, y: 0, width: w, height: h)
+        var local = rng
+        let image = renderer(photo.size).image { ctx in
             UIImage(cgImage: cg).draw(in: photo)
+            if dust { drawDust(ctx.cgContext, in: photo, short: short, rng: &local) }
+            if let date { drawDate(date, in: photo, short: short) }
+        }
+        rng = local
+        return image.cgImage ?? cg
+    }
 
-            if dust { drawDust(ctx.cgContext, in: photo, short: short, rng: &rng) }
-            if options.dateStamp { drawDate(options.date, in: photo, short: short) }
-
-            switch options.frame {
-            case .white, .black:
-                let ink: UIColor = options.frame == .black ? UIColor(white: 0.85, alpha: 1) : UIColor(white: 0.18, alpha: 1)
-                let font = UIFont.monospacedSystemFont(ofSize: short * 0.022, weight: .medium)
-                let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: ink, .kern: short * 0.003]
-                let left = NSAttributedString(string: "LATENT", attributes: attrs)
-                let right = NSAttributedString(string: stock.displayName.uppercased(), attributes: attrs)
-                let y = photo.maxY + (size.height - photo.maxY) / 2 - left.size().height / 2
-                left.draw(at: CGPoint(x: photo.minX, y: y))
-                right.draw(at: CGPoint(x: photo.maxX - right.size().width, y: y))
-            case .film:
-                let frameNo = 1 + Int(rng.unit() * 36)
-                let first = portrait ? CGRect(x: 0, y: 0, width: inset.left, height: size.height)
-                                     : CGRect(x: 0, y: 0, width: size.width, height: inset.top)
-                let second = portrait ? CGRect(x: photo.maxX, y: 0, width: inset.right, height: size.height)
-                                      : CGRect(x: 0, y: photo.maxY, width: size.width, height: inset.bottom)
-                let phase = CGFloat(rng.unit())
-                drawRebate(ctx.cgContext, band: first, vertical: portrait, outerAtStart: true, phase: phase,
-                           text: "LATENT \(stock.name.uppercased()) \(stock.iso)", number: "\(frameNo)", short: short)
-                drawRebate(ctx.cgContext, band: second, vertical: portrait, outerAtStart: false, phase: phase,
-                           text: "▸ \(frameNo)A", number: "\(frameNo + 1)", short: short)
-            case .none:
-                break
-            }
+    /// White or black print border with a caption.
+    private static func printBorder(_ cg: CGImage, stock: FilmStock, black: Bool) -> CGImage {
+        let w = CGFloat(cg.width), h = CGFloat(cg.height), short = min(w, h)
+        // Whole pixels: a fractional canvas gets rounded up and its last column/row is never painted (a dark sliver).
+        let border = (short * 0.045).rounded(), footer = (short * 0.09).rounded()
+        let size = CGSize(width: w + border * 2, height: h + border * 2 + footer)
+        let image = renderer(size).image { ctx in
+            (black ? UIColor(white: 0.06, alpha: 1) : UIColor(white: 0.97, alpha: 1)).setFill()
+            ctx.fill(CGRect(origin: .zero, size: size))
+            let photo = CGRect(x: border, y: border, width: w, height: h)
+            UIImage(cgImage: cg).draw(in: photo)
+            let ink: UIColor = black ? UIColor(white: 0.85, alpha: 1) : UIColor(white: 0.18, alpha: 1)
+            let font = UIFont.monospacedSystemFont(ofSize: short * 0.022, weight: .medium)
+            let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: ink, .kern: short * 0.003]
+            let left = NSAttributedString(string: "LATENT", attributes: attrs)
+            let right = NSAttributedString(string: stock.displayName.uppercased(), attributes: attrs)
+            let y = photo.maxY + (size.height - photo.maxY) / 2 - left.size().height / 2
+            left.draw(at: CGPoint(x: photo.minX, y: y))
+            right.draw(at: CGPoint(x: photo.maxX - right.size().width, y: y))
         }
         return image.cgImage ?? cg
+    }
+
+    /// A full-border 35mm scan, built to real film dimensions (the frame's short side = 24 mm): 5.5 mm rebates
+    /// with Kodak-standard perforations (2.79 × 1.98 mm, 4.75 mm pitch, 2 mm from the film edge), edge print in
+    /// the outer strip of one rebate, a dark film base with gentle unevenness, a soft rounded gate edge, and
+    /// scanner softness and grain over the whole border.
+    static func filmScan(_ cg: CGImage, stock: FilmStock, rng: inout SeededRandom, context: CIContext) -> CGImage {
+        let source = CIImage(cgImage: cg)
+        let portrait = cg.height > cg.width
+        // Lay the film horizontally; a portrait frame is rotated in, and the finished scan rotated back.
+        var photo = portrait ? source.oriented(.left) : source
+        photo = photo.transformed(by: CGAffineTransform(translationX: -photo.extent.minX, y: -photo.extent.minY))
+        let w = photo.extent.width, h = photo.extent.height
+        let mm = h / 24
+        let rebate = (5.5 * mm).rounded(), holder = (0.6 * mm).rounded(), gap = (2.2 * mm).rounded()
+        let size = CGSize(width: w + gap * 2, height: h + (rebate + holder) * 2)
+        let window = CGRect(x: gap, y: holder + rebate, width: w, height: h)   // same rect in UIKit and CI (symmetric)
+
+        let phase = CGFloat(rng.unit()), frameNo = 1 + Int(rng.unit() * 35)
+        let tilt = (CGFloat(rng.unit()), CGFloat(rng.unit()))
+        let layer = renderer(size).image { ctx in
+            let c = ctx.cgContext
+            // Scanner film holder, then the film base: near-black with a warm cast and slight unevenness.
+            UIColor(white: 0.015, alpha: 1).setFill(); c.fill(CGRect(origin: .zero, size: size))
+            let film = CGRect(x: 0, y: holder, width: size.width, height: size.height - holder * 2)
+            let base = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB)!, colors: [
+                UIColor(red: 0.095, green: 0.075, blue: 0.062, alpha: 1).cgColor,
+                UIColor(red: 0.055, green: 0.044, blue: 0.038, alpha: 1).cgColor] as CFArray, locations: [0, 1])!
+            c.saveGState(); c.clip(to: film)
+            c.drawLinearGradient(base, start: CGPoint(x: size.width * tilt.0, y: 0), end: CGPoint(x: size.width * tilt.1, y: size.height),
+                                 options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
+            c.restoreGState()
+
+            // Perforations: light straight through the film, so near-white and slightly warm.
+            let holeW = 2.79 * mm, holeH = 1.98 * mm, pitch = 4.75 * mm, edge = 2.0 * mm
+            let rows = [holder + edge, size.height - holder - edge - holeH]
+            UIColor(red: 0.88, green: 0.86, blue: 0.81, alpha: 1).setFill()
+            var x = pitch * phase - pitch
+            while x < size.width {
+                for y in rows { UIBezierPath(roundedRect: CGRect(x: x, y: y, width: holeW, height: holeH), cornerRadius: 0.5 * mm).fill() }
+                x += pitch
+            }
+
+            // Edge print in the outer strip of the bottom rebate (between the film edge and the perforations).
+            let font = UIFont.systemFont(ofSize: 1.0 * mm, weight: .medium, width: .condensed)
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: font, .foregroundColor: UIColor(red: 1.0, green: 0.74, blue: 0.36, alpha: 0.68), .kern: 0.14 * mm,
+            ]
+            let stripMid = size.height - holder - edge / 2
+            func print(_ text: String, at x: CGFloat) {
+                let s = NSAttributedString(string: text, attributes: attrs)
+                s.draw(at: CGPoint(x: x, y: stripMid - s.size().height / 2))
+            }
+            print("LATENT \(stock.name.uppercased()) \(stock.iso)", at: gap + w * 0.05)
+            print("\(frameNo)", at: gap + w * 0.47)
+            print("▸\(frameNo)A", at: gap + w * 0.86)
+        }
+        guard let layerCG = layer.cgImage else { return cg }
+
+        // Scanner softness and grain on the border, then the frame through a soft, slightly rounded gate.
+        let full = CGRect(origin: .zero, size: size)
+        var border = CIImage(cgImage: layerCG).clampedToExtent().applyingGaussianBlur(sigma: 0.06 * mm).cropped(to: full)
+        border = FilmPipeline.grain(on: border, stock: stock.with(\.grain, max(0.5, stock.grain)).with(\.grainSize, 1),
+                                    user: 1, extent: full, short: h)
+        let mask = renderer(size).image { ctx in
+            UIColor.black.setFill(); ctx.fill(full)
+            UIColor.white.setFill(); UIBezierPath(roundedRect: window, cornerRadius: 0.35 * mm).fill()
+        }
+        guard let maskCG = mask.cgImage else { return cg }
+        let soft = CIImage(cgImage: maskCG).clampedToExtent().applyingGaussianBlur(sigma: 0.05 * mm).cropped(to: full)
+        let blend = CIFilter.blendWithMask()
+        blend.inputImage = photo.transformed(by: CGAffineTransform(translationX: window.minX, y: window.minY))
+        blend.backgroundImage = border
+        blend.maskImage = soft
+        guard var scan = blend.outputImage?.cropped(to: full) else { return cg }
+        if portrait { scan = scan.oriented(.right) }
+        scan = scan.transformed(by: CGAffineTransform(translationX: -scan.extent.minX, y: -scan.extent.minY))
+        return context.createCGImage(scan, from: scan.extent, format: .RGBA8, colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!) ?? cg
     }
 
     private static func drawDate(_ date: Date, in photo: CGRect, short: CGFloat) {
@@ -112,36 +184,6 @@ enum Finisher {
             c.addLine(to: CGPoint(x: x + unit * CGFloat(rng.range(-6...6)), y: photo.maxY - photo.height * CGFloat(rng.range(0...0.3))))
             c.strokePath()
         }
-        c.restoreGState()
-    }
-
-    /// One sprocket band of a 35mm scan: backlit holes near the outer edge, orange edge print near the image.
-    /// Drawn horizontally; vertical bands (portrait frames) are the same drawing rotated a quarter turn.
-    static func drawRebate(_ c: CGContext, band: CGRect, vertical: Bool, outerAtStart: Bool, phase: CGFloat,
-                           text: String, number: String, short: CGFloat) {
-        c.saveGState()
-        c.translateBy(x: band.midX, y: band.midY)
-        if vertical { c.rotate(by: .pi / 2) }
-        let length = vertical ? band.height : band.width, depth = vertical ? band.width : band.height
-        // Local band: x along the film, y across; `outer` is the side away from the image.
-        let outerSign: CGFloat = (outerAtStart != vertical) ? -1 : 1
-        let holeW = short * 0.034, holeH = depth * 0.34, pitch = holeW * 1.75
-        let holeY = outerSign * depth * 0.18 - holeH / 2
-        let hole = UIColor(red: 0.93, green: 0.91, blue: 0.86, alpha: 1)
-        hole.setFill()
-        var x = -length / 2 + pitch * phase - pitch
-        while x < length / 2 {
-            UIBezierPath(roundedRect: CGRect(x: x, y: holeY, width: holeW, height: holeH), cornerRadius: holeH * 0.16).fill()
-            x += pitch
-        }
-        let ink = UIColor(red: 1.0, green: 0.58, blue: 0.22, alpha: 0.88)
-        let font = UIFont.monospacedSystemFont(ofSize: depth * 0.17, weight: .semibold)
-        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: ink, .kern: depth * 0.02]
-        let label = NSAttributedString(string: text, attributes: attrs)
-        let num = NSAttributedString(string: number, attributes: attrs)
-        let textY = -outerSign * depth * 0.22 - label.size().height / 2
-        label.draw(at: CGPoint(x: -length / 2 + length * 0.08, y: textY))
-        num.draw(at: CGPoint(x: length / 2 - length * 0.12 - num.size().width, y: textY))
         c.restoreGState()
     }
 }

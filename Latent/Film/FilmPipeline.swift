@@ -260,13 +260,14 @@ enum FilmPipeline {
         var rng = SeededRandom(seed: seed ^ 0x51ED_1EAC)
         let edge = Int(rng.unit() * 4)
         let along = CGFloat(rng.range(0.15...0.85))
-        let reach = short * CGFloat(rng.range(0.8...1.2))
+        // Real leaks hug the frame edge: the source sits well outside the frame, so only a band of glow enters.
+        let reach = short * CGFloat(rng.range(0.55...0.8))
         let p: CGPoint
         switch edge {
-        case 0: p = CGPoint(x: extent.minX - short * 0.12, y: extent.minY + extent.height * along)
-        case 1: p = CGPoint(x: extent.maxX + short * 0.12, y: extent.minY + extent.height * along)
-        case 2: p = CGPoint(x: extent.minX + extent.width * along, y: extent.minY - short * 0.12)
-        default: p = CGPoint(x: extent.minX + extent.width * along, y: extent.maxY + short * 0.12)
+        case 0: p = CGPoint(x: extent.minX - short * 0.22, y: extent.minY + extent.height * along)
+        case 1: p = CGPoint(x: extent.maxX + short * 0.22, y: extent.minY + extent.height * along)
+        case 2: p = CGPoint(x: extent.minX + extent.width * along, y: extent.minY - short * 0.22)
+        default: p = CGPoint(x: extent.minX + extent.width * along, y: extent.maxY + short * 0.22)
         }
         let linear = CGColorSpace(name: CGColorSpace.linearSRGB)!
         func glow(_ c: RGB, _ a: Double, radius: CGFloat) -> CIImage? {
@@ -276,12 +277,12 @@ enum FilmPipeline {
             g.color1 = CIColor(red: 0, green: 0, blue: 0, alpha: 1, colorSpace: linear) ?? .black
             return g.outputImage
         }
-        guard let wide = glow(RGB(1.0, 0.30, 0.07), amount * 0.78, radius: reach),
-              let hot = glow(RGB(1.0, 0.70, 0.32), amount * 0.6, radius: reach * 0.38) else { return img }
+        guard let wide = glow(RGB(1.0, 0.28, 0.06), amount * 0.26, radius: reach),
+              let hot = glow(RGB(1.0, 0.62, 0.28), amount * 0.16, radius: reach * 0.5) else { return img }
         // Stretch along the edge so it reads as a streak, not a disc.
         let stretch: CGAffineTransform = edge < 2
-            ? CGAffineTransform(translationX: p.x, y: p.y).scaledBy(x: 1, y: 1.9).translatedBy(x: -p.x, y: -p.y)
-            : CGAffineTransform(translationX: p.x, y: p.y).scaledBy(x: 1.9, y: 1).translatedBy(x: -p.x, y: -p.y)
+            ? CGAffineTransform(translationX: p.x, y: p.y).scaledBy(x: 1, y: 2.4).translatedBy(x: -p.x, y: -p.y)
+            : CGAffineTransform(translationX: p.x, y: p.y).scaledBy(x: 2.4, y: 1).translatedBy(x: -p.x, y: -p.y)
         let light = add(hot, onto: wide).transformed(by: stretch).cropped(to: extent)
         return add(light, onto: img)
     }

@@ -88,7 +88,7 @@ actor Darkroom {
             throw DarkroomError.render
         }
         clock.lap("render")
-        let finished = Finisher.finish(cg, stock: stock, options: options)
+        let finished = Finisher.finish(cg, stock: stock, options: options, context: context)
         let jpeg = try JPEGEncoder.encode(finished, metadata: metadata)
         clock.lap("finish+jpeg")
         return jpeg
