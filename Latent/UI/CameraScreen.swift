@@ -126,7 +126,7 @@ private struct TopBar: View {
                 .animation(.spring(duration: 0.5, bounce: 0.3), value: model.roll.items.count)
             Spacer()
             if model.camera.depthSupported || model.camera.isSimulated {
-                Button { model.portrait.toggle(); Feedback.selection() } label: {
+                Button { model.togglePortrait(); Feedback.selection() } label: {
                     Image(systemName: model.portrait ? "person.crop.circle.fill" : "person.crop.circle")
                         .foregroundStyle(model.portrait ? Theme.amber : Theme.label)
                         .rotationEffect(turn)

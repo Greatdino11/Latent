@@ -91,18 +91,54 @@ final class CameraController: NSObject {
     /// Camera queue.
     private func applyPortrait(_ on: Bool) -> Bool {
         wantsPortrait = on
+        guard let dev = device else { return false }
+        let zoom = dev.videoZoomFactor
         session.beginConfiguration()
         defer { session.commitConfiguration() }
         if on {
+            photoOutput.isPortraitEffectsMatteDeliveryEnabled = false
             photoOutput.isAppleProRAWEnabled = false
+            // The high-resolution format used for ProRAW has no depth; move to the best one that does.
+            if dev.activeFormat.supportedDepthDataFormats.isEmpty, let format = Self.bestDepthFormat(dev),
+               (try? dev.lockForConfiguration()) != nil {
+                dev.activeFormat = format
+                dev.unlockForConfiguration()
+            }
             if photoOutput.isDepthDataDeliverySupported { photoOutput.isDepthDataDeliveryEnabled = true }
             if photoOutput.isPortraitEffectsMatteDeliverySupported { photoOutput.isPortraitEffectsMatteDeliveryEnabled = true }
         } else {
             photoOutput.isPortraitEffectsMatteDeliveryEnabled = false
             photoOutput.isDepthDataDeliveryEnabled = false
+            if session.canSetSessionPreset(.photo) { session.sessionPreset = .photo }   // back to the full-res format
             photoOutput.isAppleProRAWEnabled = photoOutput.isAppleProRAWSupported
         }
+        pickPhotoDimensions(dev)
+        if (try? dev.lockForConfiguration()) != nil {           // a format change resets zoom: keep the chosen lens
+            dev.videoZoomFactor = min(max(zoom, dev.minAvailableVideoZoomFactor), dev.maxAvailableVideoZoomFactor)
+            dev.unlockForConfiguration()
+        }
         return photoOutput.isDepthDataDeliveryEnabled
+    }
+
+    /// The depth-capable format with the largest 4:3 photos (what the Camera app's Portrait mode uses).
+    private static func bestDepthFormat(_ dev: AVCaptureDevice) -> AVCaptureDevice.Format? {
+        let area: (CMVideoDimensions) -> Int = { Int($0.width) * Int($0.height) }
+        let candidates = dev.formats.filter { !$0.supportedDepthDataFormats.isEmpty }
+        func score(_ f: AVCaptureDevice.Format) -> Int {
+            let d = f.formatDescription.dimensions
+            let fourThree = abs(Double(d.width) / Double(max(d.height, 1)) - 4.0 / 3.0) < 0.02
+            return (fourThree ? 1 << 40 : 0) + (f.supportedMaxPhotoDimensions.map(area).max() ?? 0)
+        }
+        return candidates.max { score($0) < score($1) }
+    }
+
+    /// 12MP keeps RAW files and develop times reasonable (48MP ProRAW is ~75MB a frame).
+    private func pickPhotoDimensions(_ dev: AVCaptureDevice) {
+        let dims = dev.activeFormat.supportedMaxPhotoDimensions
+        let area: (CMVideoDimensions) -> Int = { Int($0.width) * Int($0.height) }
+        if let pick = dims.filter({ area($0) <= 12_600_000 }).max(by: { area($0) < area($1) }) ?? dims.min(by: { area($0) < area($1) }) {
+            photoOutput.maxPhotoDimensions = pick
+        }
     }
 
     /// Starts or stops the sensor (stopped while the roll or settings cover the viewfinder, and in the background).
@@ -154,12 +190,7 @@ final class CameraController: NSObject {
         photoOutput.maxPhotoQualityPrioritization = .quality
         // Shoot Apple ProRAW where available: it lets the darkroom skip the phone's tone mapping and sharpening.
         photoOutput.isAppleProRAWEnabled = photoOutput.isAppleProRAWSupported
-        // 12MP keeps RAW files and develop times reasonable (48MP ProRAW is ~75MB a frame).
-        let dims = dev.activeFormat.supportedMaxPhotoDimensions
-        let area: (CMVideoDimensions) -> Int = { Int($0.width) * Int($0.height) }
-        if let pick = dims.filter({ area($0) <= 12_600_000 }).max(by: { area($0) < area($1) }) ?? dims.min(by: { area($0) < area($1) }) {
-            photoOutput.maxPhotoDimensions = pick
-        }
+        pickPhotoDimensions(dev)
         // Selfies come out the way the viewfinder showed them.
         if let conn = photoOutput.connection(with: .video), conn.isVideoMirroringSupported {
             conn.automaticallyAdjustsVideoMirroring = false
@@ -191,7 +222,7 @@ final class CameraController: NSObject {
         if wantsPortrait { _ = applyPortrait(true) }
         if wantsRunning, !session.isRunning { session.startRunning() }
         return Setup(ok: true, lenses: lenses, selected: selected, flash: dev.hasFlash,
-                     depth: !dev.activeFormat.supportedDepthDataFormats.isEmpty)
+                     depth: dev.formats.contains { !$0.supportedDepthDataFormats.isEmpty })
     }
 
     private static func label(_ x: CGFloat) -> String {

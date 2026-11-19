@@ -20,8 +20,18 @@ final class AppModel {
     }
     var flash: FlashSetting = .off
     /// Portrait mode: capture depth so the background can be blurred (now and when re-developing).
-    var portrait = false {
-        didSet { Task { _ = await camera.setPortrait(portrait) } }
+    private(set) var portrait = false
+
+    func togglePortrait() {
+        let want = !portrait
+        portrait = want
+        Task {
+            let ok = await camera.setPortrait(want)
+            if want && !ok {
+                portrait = false
+                show("Portrait isn't available on this camera")
+            }
+        }
     }
     private(set) var developingCount = 0
     private(set) var shutterTick = 0
