@@ -21,6 +21,8 @@ struct RollItem: Identifiable, Hashable {
     var negativeURL: URL { folder.appendingPathComponent("\(base).neg.heic") }
     var recipeURL: URL { folder.appendingPathComponent("\(base).recipe.json") }
     var photosURL: URL { folder.appendingPathComponent("\(base).photos") }
+    var depthURL: URL { folder.appendingPathComponent("\(base).depth.png") }
+    var hasDepth: Bool { FileManager.default.fileExists(atPath: depthURL.path) }
     var stock: FilmStock? { FilmStock.with(id: stockID) }
     var hasNegative: Bool { FileManager.default.fileExists(atPath: negativeURL.path) }
 }
@@ -59,6 +61,7 @@ final class RollStore {
         try result.jpeg.write(to: item.url, options: .atomic)
         try result.negative.write(to: item.negativeURL, options: .atomic)
         try JSONEncoder().encode(result.options).write(to: item.recipeURL, options: .atomic)
+        if let depth = result.depth { try depth.write(to: item.depthURL, options: .atomic) }
         items.insert(item, at: 0)
         return item
     }
@@ -86,7 +89,7 @@ final class RollStore {
     }
 
     func delete(_ item: RollItem) {
-        for url in [item.url, item.negativeURL, item.recipeURL, item.photosURL] { try? FileManager.default.removeItem(at: url) }
+        for url in [item.url, item.negativeURL, item.recipeURL, item.photosURL, item.depthURL] { try? FileManager.default.removeItem(at: url) }
         purgeThumbs(item)
         items.removeAll { $0.id == item.id }
     }

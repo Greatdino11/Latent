@@ -32,6 +32,8 @@ final class CameraController: NSObject {
     private(set) var hasFlash = false
     private(set) var position: AVCaptureDevice.Position = .back
     private(set) var hasFrontCamera = false
+    /// The current camera can capture depth (for portrait blur).
+    private(set) var depthSupported = false
 
     var isSimulated: Bool { status == .simulated }
     var isReady: Bool { status == .running || status == .simulated }
@@ -45,8 +47,9 @@ final class CameraController: NSObject {
     @ObservationIgnored private var inFlight: [Int64: PhotoDelegate] = [:]
     @ObservationIgnored private var configured = false
     @ObservationIgnored private var wantsRunning = true
+    @ObservationIgnored private var wantsPortrait = false
 
-    private struct Setup { var ok: Bool; var lenses: [LensOption]; var selected: Int; var flash: Bool }
+    private struct Setup { var ok: Bool; var lenses: [LensOption]; var selected: Int; var flash: Bool; var depth = false }
 
     @MainActor
     func start() async {
@@ -74,7 +77,32 @@ final class CameraController: NSObject {
     }
 
     @MainActor private func apply(_ setup: Setup) {
-        lenses = setup.lenses; selectedLens = setup.selected; hasFlash = setup.flash
+        lenses = setup.lenses; selectedLens = setup.selected; hasFlash = setup.flash; depthSupported = setup.depth
+    }
+
+    /// Portrait mode swaps ProRAW for processed capture with depth (iOS can't deliver depth with RAW).
+    @MainActor @discardableResult
+    func setPortrait(_ on: Bool) async -> Bool {
+        if isSimulated { return on }
+        guard configured else { wantsPortrait = on; return false }
+        return await withCheckedContinuation { cont in queue.async { cont.resume(returning: self.applyPortrait(on)) } }
+    }
+
+    /// Camera queue.
+    private func applyPortrait(_ on: Bool) -> Bool {
+        wantsPortrait = on
+        session.beginConfiguration()
+        defer { session.commitConfiguration() }
+        if on {
+            photoOutput.isAppleProRAWEnabled = false
+            if photoOutput.isDepthDataDeliverySupported { photoOutput.isDepthDataDeliveryEnabled = true }
+            if photoOutput.isPortraitEffectsMatteDeliverySupported { photoOutput.isPortraitEffectsMatteDeliveryEnabled = true }
+        } else {
+            photoOutput.isPortraitEffectsMatteDeliveryEnabled = false
+            photoOutput.isDepthDataDeliveryEnabled = false
+            photoOutput.isAppleProRAWEnabled = photoOutput.isAppleProRAWSupported
+        }
+        return photoOutput.isDepthDataDeliveryEnabled
     }
 
     /// Starts or stops the sensor (stopped while the roll or settings cover the viewfinder, and in the background).
@@ -160,8 +188,10 @@ final class CameraController: NSObject {
         }
 
         configured = true
+        if wantsPortrait { _ = applyPortrait(true) }
         if wantsRunning, !session.isRunning { session.startRunning() }
-        return Setup(ok: true, lenses: lenses, selected: selected, flash: dev.hasFlash)
+        return Setup(ok: true, lenses: lenses, selected: selected, flash: dev.hasFlash,
+                     depth: !dev.activeFormat.supportedDepthDataFormats.isEmpty)
     }
 
     private static func label(_ x: CGFloat) -> String {
@@ -224,7 +254,8 @@ final class CameraController: NSObject {
         return try await withCheckedThrowingContinuation { cont in
             queue.async {
                 let settings: AVCapturePhotoSettings
-                if let raw = self.photoOutput.availableRawPhotoPixelFormatTypes.first(where: { AVCapturePhotoOutput.isAppleProRAWPixelFormat($0) }) {
+                let portrait = self.photoOutput.isDepthDataDeliveryEnabled
+                if !portrait, let raw = self.photoOutput.availableRawPhotoPixelFormatTypes.first(where: { AVCapturePhotoOutput.isAppleProRAWPixelFormat($0) }) {
                     settings = AVCapturePhotoSettings(rawPixelFormatType: raw)
                 } else if self.photoOutput.availablePhotoCodecTypes.contains(.hevc) {
                     settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.hevc])
@@ -236,6 +267,14 @@ final class CameraController: NSObject {
                 // multi-frame capture instead: it's what keeps night frames from turning to noise.
                 settings.photoQualityPrioritization = self.isLowLight ? .quality : .balanced
                 if self.photoOutput.supportedFlashModes.contains(flash.avMode) { settings.flashMode = flash.avMode }
+                if portrait {
+                    settings.isDepthDataDeliveryEnabled = true
+                    settings.embedsDepthDataInPhoto = true
+                    if self.photoOutput.isPortraitEffectsMatteDeliveryEnabled {
+                        settings.isPortraitEffectsMatteDeliveryEnabled = true
+                        settings.embedsPortraitEffectsMatteInPhoto = true
+                    }
+                }
                 if let conn = self.photoOutput.connection(with: .video),
                    let angle = self.rotation?.videoRotationAngleForHorizonLevelCapture,
                    conn.isVideoRotationAngleSupported(angle) {

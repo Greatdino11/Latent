@@ -28,6 +28,13 @@ enum FrameStyle: String, CaseIterable, Identifiable, Codable {
     var label: String { self == .film ? "35mm" : rawValue.capitalized }
 }
 
+/// Portrait lens characters for depth blur.
+enum PortraitLens: String, CaseIterable, Identifiable, Codable {
+    case classic, bubble, swirl
+    var id: String { rawValue }
+    var label: String { rawValue.capitalized }
+}
+
 /// Small deterministic RNG (SplitMix64): the same photo always gets the same dust and light leak.
 struct SeededRandom {
     private var state: UInt64
@@ -70,6 +77,10 @@ struct DevelopOptions: Codable {
     var lightLeak: Double? = nil
     /// Dust specks and hairline scratches from the "scan".
     var dust: Bool? = nil
+    /// Portrait blur (needs a depth map saved with the frame); nil = off.
+    var portraitLens: PortraitLens? = nil
+    var blurAmount: Double? = nil      // 0…1
+    var focusDepth: Double? = nil      // 0 far … 1 near, in the frame's normalised depth
 
     /// Fixed per frame, so dust and leaks come out the same every time it's developed.
     var seed: UInt64 { UInt64(abs(date.timeIntervalSince1970 * 1000)) }
@@ -86,12 +97,15 @@ struct CapturedFrame {
     private let captureMetadata: [String: Any]
     let flashFired: Bool
     let location: CLLocation?
+    /// A ready-made normalised depth map (tests / simulator); otherwise depth is read from the photo data.
+    var depth: CIImage?
 
-    init(source: FrameSource, metadata: [String: Any], flashFired: Bool = false, location: CLLocation? = nil) {
+    init(source: FrameSource, metadata: [String: Any], flashFired: Bool = false, location: CLLocation? = nil, depth: CIImage? = nil) {
         self.source = source
         self.captureMetadata = metadata
         self.flashFired = flashFired
         self.location = location
+        self.depth = depth
     }
 
     /// Capture metadata, plus GPS when location tagging is on.
@@ -115,6 +129,8 @@ struct DevelopResult {
     let jpeg: Data
     let negative: Data
     let options: DevelopOptions
+    /// Normalised depth map (8-bit grey PNG, near = white), when the capture had one.
+    var depth: Data? = nil
 }
 
 enum DarkroomError: LocalizedError {

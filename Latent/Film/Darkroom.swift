@@ -28,6 +28,15 @@ actor Darkroom {
         options.sceneReferred = sceneReferred
         if frame.flashFired { options.flashFired = true }
         options.negativeFormat = NegativeCodec.current
+        // Depth (portrait captures, iPhone Portrait-mode imports): kept so blur and focus can change later.
+        var depth: (image: CIImage, png: Data)?
+        if let given = frame.depth { depth = try? storeDepth(given) }
+        else if case .processed(let data) = frame.source, let found = DepthMap.extract(from: data, context: context) {
+            depth = try? storeDepth(found.image)
+            if options.focusDepth == nil { options.focusDepth = found.focus }
+        }
+        if depth != nil, options.focusDepth == nil, let d = depth { options.focusDepth = DepthMap.autoFocus(d.image, matte: nil, context: context) }
+        if depth == nil { options.portraitLens = nil }
         // Encode the negative (mostly the HEVC encoder) while the GPU prints, rather than one after the other.
         let negativeDone = DispatchGroup()
         var negativeResult: Result<Data, Error> = .failure(DarkroomError.encode)
@@ -35,33 +44,45 @@ actor Darkroom {
         DispatchQueue.global(qos: .userInitiated).async(group: negativeDone) {
             negativeResult = Result { try ctx.heif10Representation(of: toStore, colorSpace: p3, options: [:]) }
         }
-        let jpeg = try print(scene, stock: stock, options: options, metadata: frame.metadata, clock: &clock)
+        let jpeg = try print(scene, stock: stock, options: options, metadata: frame.metadata, depth: depth?.image, clock: &clock)
         negativeDone.wait()
         let negative = try negativeResult.get()
         clock.lap("negative (overlapped)")
         clock.done()
-        return DevelopResult(jpeg: jpeg, negative: negative, options: options)
+        return DevelopResult(jpeg: jpeg, negative: negative, options: options, depth: depth?.png)
     }
 
     /// Prints a stored negative again, on any stock.
-    func redevelop(negative: Data, metadata: [String: Any], stock: FilmStock, options: DevelopOptions) throws -> Data {
+    func redevelop(negative: Data, depth: Data? = nil, metadata: [String: Any], stock: FilmStock, options: DevelopOptions) throws -> Data {
         guard let stored = CIImage(data: negative) else { throw DarkroomError.decode }
         var clock = Stopwatch("redevelop \(stock.id)")
         let scene = try materialize(NegativeCodec.decode(stored, format: options.negativeFormat))
         clock.lap("decode")
         defer { clock.done() }
-        return try print(scene, stock: stock, options: options, metadata: metadata, clock: &clock)
+        let depthImage = depth.flatMap { CIImage(data: $0, options: [.colorSpace: NSNull()]) }
+        return try print(scene, stock: stock, options: options, metadata: metadata, depth: depthImage, clock: &clock)
+    }
+
+    /// Saves a normalised depth map as an 8-bit grey PNG (stored values, no colour management) and returns the
+    /// image read back from it, so the first print and every re-develop use identical depth.
+    private func storeDepth(_ depth: CIImage) throws -> (image: CIImage, png: Data) {
+        let e = depth.extent
+        let grey = depth.transformed(by: CGAffineTransform(translationX: -e.minX, y: -e.minY))
+        guard let png = context.pngRepresentation(of: grey, format: .L8, colorSpace: CGColorSpace(name: CGColorSpace.linearGray)!),
+              let back = CIImage(data: png, options: [.colorSpace: NSNull()]) else { throw DarkroomError.encode }
+        return (back, png)
     }
 
     private func print(_ scene: CIImage, stock: FilmStock, options: DevelopOptions, metadata: [String: Any],
-                       clock: inout Stopwatch) throws -> Data {
+                       depth: CIImage? = nil, clock: inout Stopwatch) throws -> Data {
         let strength = min(1, max(0, options.strength ?? 1))
         let cube = mixedCube(stock, strength: strength, expandSDR: !options.sceneReferred)
         let effective = stock.scaled(by: strength)
         clock.lap("lut")
         let lab = options.sceneReferred ? labCorrection(scene) : 0
         clock.lap("lab")
-        let image = FilmPipeline.apply(stock: effective, to: scene, options: options, cube: cube, context: context, labEV: lab)
+        let image = FilmPipeline.apply(stock: effective, to: scene, options: options, cube: cube, context: context, labEV: lab,
+                                       depth: depth)
         clock.lap("graph+flare")
         guard let cg = context.createCGImage(image, from: image.extent, format: .RGBA8, colorSpace: sRGB) else {
             throw DarkroomError.render

@@ -6,7 +6,7 @@ import UIKit
 
 enum FilmPipeline {
     static func apply(stock: FilmStock, to scene: CIImage, options: DevelopOptions, cube: Data, context: CIContext, labEV: Double = 0,
-                      cubeDimension: Int = LUT.dimension) -> CIImage {
+                      cubeDimension: Int = LUT.dimension, depth: CIImage? = nil) -> CIImage {
         var img = crop(scene, to: options.aspect)
         let extent = img.extent
         let short = min(extent.width, extent.height)
@@ -14,6 +14,18 @@ enum FilmPipeline {
         // 1. Exposure (scene-linear): capture compensation, stock bias, and any push/pull chosen afterwards.
         let ev = options.exposure + stock.exposureBias + (options.pushPull ?? 0) + labEV
         if ev != 0 { img = img.applyingFilter("CIExposureAdjust", parameters: [kCIInputEVKey: ev]) }
+
+        // Portrait blur in scene light, so out-of-focus highlights bloom into proper bokeh.
+        if let lens = options.portraitLens, let depth, (options.blurAmount ?? 0.6) > 0.01 {
+            let d = scene.extent, de = depth.extent
+            let fitted = depth
+                .transformed(by: CGAffineTransform(translationX: -de.minX, y: -de.minY))
+                .transformed(by: CGAffineTransform(scaleX: d.width / de.width, y: d.height / de.height))
+                .transformed(by: CGAffineTransform(translationX: d.minX, y: d.minY))
+            let cropped = crop(fitted, to: options.aspect)
+            img = Portrait.blur(img, depth: cropped, lens: lens, amount: options.blurAmount ?? 0.6,
+                                focus: options.focusDepth ?? 0.8, extent: extent, short: short)
+        }
 
         let exposedScene = img
 

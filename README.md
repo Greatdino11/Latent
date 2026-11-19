@@ -39,6 +39,10 @@ Date stamp is an extra.
 - **Photos:** each frame is one asset, edited in place when re-developed; with "Keep the original underneath" the RAW
   is the base image and Photos ▸ Revert returns it.
 - **Control Center / Lock Screen:** add the "Latent Camera" control (iOS 18) — `LatentControls/` widget extension.
+- **Portrait:** the person icon on the camera captures depth (instead of ProRAW); the roll's LENS tool sets the
+  lens (Classic, Bubble, Swirl), blur and focus afterwards. iPhone Portrait-mode photos you import keep their depth.
+- **Your own stocks:** Settings ▸ Stocks ▸ New stock — sliders on top of any stock with a live preview.
+- **Scan character:** light leaks, dust & scratches, and a 35mm sprocket border (Settings ▸ Finishing, or FRAME).
 - Settings also has: lens flare strength, per-stock look strength, location tagging, full-screen reveal, haptics,
   film-advance sound, storage usage and discarding old negatives.
 

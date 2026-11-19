@@ -19,6 +19,10 @@ final class AppModel {
         didSet { if !camera.isSimulated { camera.setExposureBias(Float(exposure)) } }
     }
     var flash: FlashSetting = .off
+    /// Portrait mode: capture depth so the background can be blurred (now and when re-developing).
+    var portrait = false {
+        didSet { Task { _ = await camera.setPortrait(portrait) } }
+    }
     private(set) var developingCount = 0
     private(set) var shutterTick = 0
     /// The most recently developed frame, used to play the reveal on the roll thumbnail.
@@ -83,6 +87,7 @@ final class AppModel {
         )
         o.strength = prefs.strength(for: stock)
         if prefs.lightLeak > 0 { o.lightLeak = prefs.lightLeak }
+        if portrait { o.portraitLens = prefs.portraitLens; o.blurAmount = prefs.blurAmount }
         if prefs.dust { o.dust = true }
         return o
     }
@@ -190,7 +195,8 @@ final class AppModel {
         if stock.id != item.stockID { options.strength = prefs.strength(for: stock) }
         edit(&options)
         let metadata = JPEGEncoder.metadata(of: item.url)
-        let jpeg = try await Darkroom.shared.redevelop(negative: negative, metadata: metadata, stock: stock, options: options)
+        let depth = try? Data(contentsOf: item.depthURL)
+        let jpeg = try await Darkroom.shared.redevelop(negative: negative, depth: depth, metadata: metadata, stock: stock, options: options)
         let updated = try roll.replace(item, stock: stock, jpeg: jpeg, options: options)
         if let id = roll.photosID(for: updated) {
             do {
@@ -240,6 +246,25 @@ final class AppModel {
                 let rawLike = CIImage(data: data, options: [.applyOrientationProperty: true])?
                     .applyingFilter("CIExposureAdjust", parameters: [kCIInputEVKey: -1.3])
                 let isDNGFile = ["dng", "nef", "cr2", "cr3", "arw", "raf", "orf", "rw2"].contains(file.pathExtension.lowercased())
+                // `-demoPortrait`: a synthetic depth map (near in the middle) and each lens, on Honey.
+                if args.contains("-demoPortrait"), let probe = CIImage(data: data, options: [.applyOrientationProperty: true]) {
+                    let e = probe.extent, short = min(e.width, e.height)
+                    let g = CIFilter(name: "CIRadialGradient", parameters: [
+                        "inputCenter": CIVector(x: e.midX, y: e.midY * 0.9), "inputRadius0": short * 0.16, "inputRadius1": short * 0.62,
+                        "inputColor0": CIColor(red: 1, green: 1, blue: 1), "inputColor1": CIColor(red: 0.1, green: 0.1, blue: 0.1)])!
+                    let depth = g.outputImage!.cropped(to: e)
+                    for lens in PortraitLens.allCases {
+                        t = t.addingTimeInterval(1)
+                        var options = currentOptions(for: .honey); options.date = t
+                        options.portraitLens = lens; options.blurAmount = 0.9
+                        let frame = CapturedFrame(source: isDNGFile ? .raw(data, hint: UTType(filenameExtension: file.pathExtension)?.identifier) : .processed(data),
+                                                  metadata: [:], depth: depth)
+                        if let result = try? await Darkroom.shared.develop(frame, stock: .honey, options: options) {
+                            try? roll.add(result, stock: .honey)
+                        }
+                    }
+                    continue
+                }
                 for stock in FilmStock.available where isDNGFile || !asRAW || ["honey", "coast", "pine", "valley"].contains(stock.id) {
                     t = t.addingTimeInterval(1)
                     var options = currentOptions(for: stock); options.date = t

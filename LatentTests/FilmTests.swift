@@ -275,3 +275,30 @@ final class CustomStockTests: XCTestCase {
         XCTAssertEqual(round, [c])
     }
 }
+
+final class PortraitTests: XCTestCase {
+    private let ctx = CIContext(options: [.cacheIntermediates: false])
+
+    private func value(_ image: CIImage, at p: CGPoint) -> Float {
+        var px = [Float](repeating: 0, count: 4)
+        ctx.render(image, toBitmap: &px, rowBytes: 16, bounds: CGRect(x: p.x, y: p.y, width: 1, height: 1), format: .RGBAf, colorSpace: nil)
+        return px[0]
+    }
+
+    /// Mask is clear where depth matches focus and full where it's far from it.
+    func testBlurMaskFollowsFocus() throws {
+        let e = CGRect(x: 0, y: 0, width: 400, height: 400)
+        // Left half near (1), right half far (0).
+        let near = CIImage(color: .white).cropped(to: CGRect(x: 0, y: 0, width: 200, height: 400))
+        let depth = near.composited(over: CIImage(color: .black).cropped(to: e))
+        let mask = try XCTUnwrap(Portrait.blurMask(depth, focus: 1, extent: e, short: 400))
+        XCTAssertLessThan(value(mask, at: CGPoint(x: 40, y: 200)), 0.05, "in-focus side stays sharp")
+        XCTAssertGreaterThan(value(mask, at: CGPoint(x: 360, y: 200)), 0.95, "far side is fully blurred")
+    }
+
+    func testRecipeCarriesPortraitFields() throws {
+        var o = DevelopOptions(); o.portraitLens = .swirl; o.blurAmount = 0.4; o.focusDepth = 0.7
+        let back = try JSONDecoder().decode(DevelopOptions.self, from: JSONEncoder().encode(o))
+        XCTAssertEqual(back.portraitLens, .swirl); XCTAssertEqual(back.blurAmount, 0.4); XCTAssertEqual(back.focusDepth, 0.7)
+    }
+}

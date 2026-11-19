@@ -16,6 +16,8 @@ final class Preferences {
     /// Light leaks on new frames: 0 off, 0.5 subtle, 1 strong.
     var lightLeak: Double { didSet { d.set(lightLeak, forKey: "lightLeak") } }
     var dust: Bool { didSet { d.set(dust, forKey: "dust") } }
+    var portraitLens: PortraitLens { didSet { d.set(portraitLens.rawValue, forKey: "portraitLens") } }
+    var blurAmount: Double { didSet { d.set(blurAmount, forKey: "blurAmount") } }
     var saveToPhotos: Bool { didSet { d.set(saveToPhotos, forKey: "saveToPhotos") } }
     var saveOriginal: Bool { didSet { d.set(saveOriginal, forKey: "saveOriginal") } }
     var showGrid: Bool { didSet { d.set(showGrid, forKey: "grid") } }
@@ -43,7 +45,7 @@ final class Preferences {
     init() {
         d.register(defaults: [
             "selectedStock": FilmStock.randomID, "aspect": AspectRatio.r3x2.rawValue, "grain": 1.0,
-            "halation": true, "flareAmount": 0.6, "dateStamp": false, "frame": FrameStyle.none.rawValue, "lightLeak": 0.0, "dust": false,
+            "halation": true, "flareAmount": 0.6, "dateStamp": false, "frame": FrameStyle.none.rawValue, "lightLeak": 0.0, "dust": false, "portraitLens": PortraitLens.classic.rawValue, "blurAmount": 0.6,
             "saveToPhotos": true, "saveOriginal": false, "grid": false, "level": true,
             "saveLocation": false, "haptics": true, "advanceSound": false, "bigReveal": false,
         ])
@@ -59,6 +61,8 @@ final class Preferences {
         frameStyle = FrameStyle(rawValue: d.string(forKey: "frame") ?? "") ?? .none
         lightLeak = d.double(forKey: "lightLeak")
         dust = d.bool(forKey: "dust")
+        portraitLens = PortraitLens(rawValue: d.string(forKey: "portraitLens") ?? "") ?? .classic
+        blurAmount = d.double(forKey: "blurAmount")
         saveToPhotos = d.bool(forKey: "saveToPhotos")
         saveOriginal = d.bool(forKey: "saveOriginal")
         showGrid = d.bool(forKey: "grid")

@@ -18,6 +18,14 @@ struct Viewfinder: View {
                         AspectMask(frame: frame)
                         if prefs.showGrid { GridLines(frame: frame) }
                         if prefs.showLevel { LevelLine(tilt: model.level.tilt).position(x: frame.midX, y: frame.midY) }
+                        if model.portrait {
+                            Text("PORTRAIT · \(prefs.portraitLens.label.uppercased())")
+                                .font(Theme.mono(10, .bold)).foregroundStyle(Theme.amber)
+                                .padding(.horizontal, 8).padding(.vertical, 4)
+                                .background(.black.opacity(0.55), in: Capsule())
+                                .position(x: frame.midX, y: frame.maxY - 18)
+                                .allowsHitTesting(false)
+                        }
                         if let p = focusPoint { FocusReticle().position(p).allowsHitTesting(false) }
                         Color.black.opacity(blink ? 1 : 0).allowsHitTesting(false)
                     }

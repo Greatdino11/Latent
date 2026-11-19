@@ -125,6 +125,14 @@ private struct TopBar: View {
                 .contentTransition(.numericText())
                 .animation(.spring(duration: 0.5, bounce: 0.3), value: model.roll.items.count)
             Spacer()
+            if model.camera.depthSupported || model.camera.isSimulated {
+                Button { model.portrait.toggle(); Feedback.selection() } label: {
+                    Image(systemName: model.portrait ? "person.crop.circle.fill" : "person.crop.circle")
+                        .foregroundStyle(model.portrait ? Theme.amber : Theme.label)
+                        .rotationEffect(turn)
+                }
+                .accessibilityLabel(model.portrait ? "Portrait on" : "Portrait off")
+            }
             if model.camera.hasFrontCamera {
                 Button { Task { await model.camera.flip() } } label: {
                     Image(systemName: "arrow.triangle.2.circlepath.camera").rotationEffect(turn)

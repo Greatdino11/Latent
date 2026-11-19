@@ -244,7 +244,7 @@ private struct RollCell: View {
 
 // MARK: - Pager
 
-private enum DevelopTool: String, CaseIterable { case film = "FILM", light = "LIGHT", frame = "FRAME" }
+private enum DevelopTool: String, CaseIterable { case film = "FILM", light = "LIGHT", lens = "LENS", frame = "FRAME" }
 
 private struct PhotoPager: View {
     @Environment(AppModel.self) private var model
@@ -269,6 +269,9 @@ private struct PhotoPager: View {
     @State private var border: FrameStyle = .none
     @State private var leak = 0.0
     @State private var dust = false
+    @State private var lens: PortraitLens?
+    @State private var blur = 0.6
+    @State private var focus = 0.8
     @State private var loadedFor = ""
 
     private var item: RollItem? { model.roll.item(id: selection) }
@@ -341,7 +344,7 @@ private struct PhotoPager: View {
                 .font(Theme.mono(13, .bold)).foregroundStyle(Theme.amber)
             Spacer()
             if item.hasNegative {
-                ForEach(DevelopTool.allCases, id: \.self) { t in
+                ForEach(DevelopTool.allCases.filter { $0 != .lens || item.hasDepth }, id: \.self) { t in
                     Button(t.rawValue) { withAnimation(.snappy) { tool = t } }
                         .font(Theme.mono(11, .bold))
                         .foregroundStyle(tool == t ? Theme.amber : Theme.dim)
@@ -361,6 +364,7 @@ private struct PhotoPager: View {
             case .film: filmTool
             case .light: lightTool
             case .frame: frameTool
+            case .lens: lensTool
             }
         }
         .frame(height: 112)
@@ -399,6 +403,34 @@ private struct PhotoPager: View {
             }
             .padding(.horizontal, 18)
         }
+    }
+
+    /// Portrait blur, for frames with a depth map: lens character, how much blur, and where focus sits.
+    private var lensTool: some View {
+        VStack(spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    chip("OFF", on: lens == nil) { lens = nil; apply() }
+                    ForEach(PortraitLens.allCases) { l in
+                        chip(l.label.uppercased(), on: lens == l) { lens = l; apply() }
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+            HStack(spacing: 10) {
+                Text("BLUR").font(Theme.mono(10, .bold)).foregroundStyle(Theme.dim).frame(width: 40, alignment: .leading)
+                Slider(value: $blur, in: 0.1...1) { editing in if !editing, lens != nil { apply() } }
+            }
+            .padding(.horizontal, 18)
+            HStack(spacing: 10) {
+                Text("FOCUS").font(Theme.mono(10, .bold)).foregroundStyle(Theme.dim).frame(width: 40, alignment: .leading)
+                Text("far").font(.caption2).foregroundStyle(Theme.dim)
+                Slider(value: $focus, in: 0...1) { editing in if !editing, lens != nil { apply() } }
+                Text("near").font(.caption2).foregroundStyle(Theme.dim)
+            }
+            .padding(.horizontal, 18)
+        }
+        .disabled(false)
     }
 
     private var lightTool: some View {
@@ -473,6 +505,10 @@ private struct PhotoPager: View {
         border = r.frame
         leak = r.lightLeak ?? 0
         dust = r.dust ?? false
+        lens = r.portraitLens
+        blur = r.blurAmount ?? model.prefs.blurAmount
+        focus = r.focusDepth ?? 0.8
+        if tool == .lens, !item.hasDepth { tool = .film }
         loadedFor = item.id
     }
 
@@ -486,11 +522,13 @@ private struct PhotoPager: View {
         let stock = FilmStock.with(id: stockID) ?? item.stock
         let (s, p, a, d, b) = (strength, push, aspect, dateStamp, border)
         let (lk, du) = (leak, dust)
+        let (ln, bl, fc) = (lens, blur, focus)
         Task {
             do {
                 status = try await model.reprint(item, stock: stock) { o in
                     o.strength = s; o.pushPull = p; o.aspect = a; o.dateStamp = d; o.frame = b
                     o.lightLeak = lk > 0 ? lk : nil; o.dust = du ? true : nil
+                    o.portraitLens = ln; o.blurAmount = bl; o.focusDepth = fc
                 }
             } catch {
                 status = error.localizedDescription

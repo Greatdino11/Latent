@@ -50,6 +50,17 @@ struct SettingsView: View {
                     Text("35mm adds a film-scan border with sprocket holes and edge numbers. Leaks and dust are placed differently on every frame, and can be changed per photo in the roll (FRAME).")
                 }
                 Section {
+                    Picker("Lens", selection: $prefs.portraitLens) {
+                        ForEach(PortraitLens.allCases) { Text($0.label).tag($0) }
+                    }
+                    VStack(alignment: .leading) {
+                        Text("Background blur")
+                        Slider(value: $prefs.blurAmount, in: 0.1...1)
+                    }
+                } header: { Text("Portrait") } footer: {
+                    Text("Turn on Portrait with the person icon on the camera. It captures depth (instead of ProRAW) so the background can be blurred: Classic is smooth, Bubble gives bright-rimmed bokeh, Swirl spins the background like a vintage lens. Change the lens, blur and focus later in the roll (LENS).")
+                }
+                Section {
                     Picker("Aspect ratio", selection: $prefs.aspect) {
                         ForEach(AspectRatio.allCases) { Text($0.label).tag($0) }
                     }
