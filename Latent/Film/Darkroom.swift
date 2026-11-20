@@ -100,6 +100,31 @@ actor Darkroom {
         return jpeg
     }
 
+    /// Two negatives on one frame, like winding the film back: each at half exposure, added in scene light, the
+    /// second scaled to fill the first. Printed as a new frame on `stock`, with its own negative.
+    func doubleExposure(_ a: Data, _ ra: DevelopOptions, _ b: Data, _ rb: DevelopOptions,
+                        stock: FilmStock, options: DevelopOptions, metadata: [String: Any]) throws -> DevelopResult {
+        guard let sa = CIImage(data: a), let sb = CIImage(data: b) else { throw DarkroomError.decode }
+        let combined = Self.superimpose(NegativeCodec.decode(sa, format: ra.negativeFormat),
+                                        NegativeCodec.decode(sb, format: rb.negativeFormat))
+        let frame = CapturedFrame(source: .image(combined, sceneReferred: ra.sceneReferred), metadata: metadata)
+        return try develop(frame, stock: stock, options: options)
+    }
+
+    /// Two scene-linear exposures on one frame, each given half the light (−1 EV) so the sum is exposed like a
+    /// single shot. The second is scaled to fill the first frame and centred.
+    static func superimpose(_ first: CIImage, _ second: CIImage) -> CIImage {
+        let e = first.extent, f = second.extent
+        let k = max(e.width / f.width, e.height / f.height)
+        let fitted = second
+            .transformed(by: CGAffineTransform(translationX: -f.midX, y: -f.midY))
+            .transformed(by: CGAffineTransform(scaleX: k, y: k))
+            .transformed(by: CGAffineTransform(translationX: e.midX, y: e.midY))
+            .cropped(to: e)
+        let half: (CIImage) -> CIImage = { $0.applyingFilter("CIExposureAdjust", parameters: [kCIInputEVKey: -1]) }
+        return FilmPipeline.add(half(fitted), onto: half(first)).cropped(to: e)
+    }
+
     /// The frame as it came out of the camera: same crop and exposure, but a plain neutral print with none of the
     /// film's colour, grain, glow, leaks, flare or lens blur. For "hold to compare" in the roll.
     func original(negative: Data, recipe: DevelopOptions, maxPixel: CGFloat = 2000) throws -> CGImage {

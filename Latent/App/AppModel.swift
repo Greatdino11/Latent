@@ -253,6 +253,56 @@ final class AppModel {
         return "Re-developed."
     }
 
+    /// Double exposure of two roll frames, printed as a new frame on the first one's stock and settings.
+    func doubleExposure(_ a: RollItem, _ b: RollItem) async throws -> RollItem {
+        let na = try Data(contentsOf: a.negativeURL), nb = try Data(contentsOf: b.negativeURL)
+        let ra = roll.recipe(for: a), rb = roll.recipe(for: b)
+        let stock = a.stock ?? .clear
+        var options = ra
+        options.date = Date()
+        options.cropShift = nil; options.portraitLens = nil; options.pushPull = nil
+        options.grainAmount = prefs.grainAmount; options.halation = prefs.halation; options.flareAmount = prefs.flareAmount
+        let result = try await Darkroom.shared.doubleExposure(na, ra, nb, rb, stock: stock, options: options,
+                                                             metadata: JPEGEncoder.metadata(of: a.url))
+        let item = try roll.add(result, stock: stock)
+        lastDeveloped = item
+        if prefs.saveToPhotos {
+            let recipe = (try? JSONEncoder().encode(result.options)) ?? Data()
+            if let id = try? await PhotoLibrary.create(print: result.jpeg, original: nil, recipe: recipe, location: nil, date: options.date) {
+                roll.setPhotosID(id, for: item)
+            }
+        }
+        return item
+    }
+
+    /// A contact sheet of frames in shooting order (up to 36), written to a temporary JPEG.
+    func contactSheet(_ items: [RollItem], progress: (Int, Int) -> Void) async throws -> URL {
+        let ordered = Array(items.sorted { $0.date < $1.date }.prefix(ContactSheet.maxFrames))
+        var frames: [ContactSheet.Frame] = []
+        for (i, item) in ordered.enumerated() {
+            progress(i + 1, ordered.count)
+            let stock = item.stock ?? .clear
+            var image: CGImage?
+            if item.hasNegative, let neg = try? Data(contentsOf: item.negativeURL) {
+                image = try? await Darkroom.shared.preview(negative: neg, recipe: roll.recipe(for: item), stock: stock, maxPixel: 900)
+            }
+            if image == nil { image = await roll.thumbnail(for: item, maxPixel: 900)?.cgImage }
+            if let image { frames.append(.init(image: image, number: i + 1, stock: stock.displayName)) }
+        }
+        let f = DateFormatter(); f.dateFormat = "d MMM yyyy"
+        let days = Set(ordered.map { f.string(from: $0.date) })
+        let title = "LATENT   " + (days.count == 1 ? days.first! : "\(f.string(from: ordered.first!.date)) – \(f.string(from: ordered.last!.date))")
+            + "   \(frames.count) FRAMES"
+        let seed = UInt64(abs(ordered.first!.date.timeIntervalSince1970))
+        let jpeg: Data = try await Task.detached(priority: .userInitiated) {
+            guard let cg = ContactSheet.render(frames, title: title, seed: seed) else { throw DarkroomError.render }
+            return try JPEGEncoder.encode(cg, metadata: [:])
+        }.value
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Latent contact sheet \(f.string(from: Date())).jpg")
+        try jpeg.write(to: url, options: .atomic)
+        return url
+    }
+
     /// Saves a frame to Photos: updates its existing copy, or adds a new one.
     func saveToPhotos(_ item: RollItem) async throws -> String {
         let jpeg = try Data(contentsOf: item.url)
@@ -276,6 +326,31 @@ final class AppModel {
     func developDemoRollIfRequested() async {
         let args = ProcessInfo.processInfo.arguments
         guard camera.isSimulated else { return }
+        // `-demoSheet` / `-demoDouble`: a contact sheet of the roll and a double exposure of its two newest frames,
+        // written to Documents/DemoOut.
+        if args.contains("-demoSheet") || args.contains("-demoDouble") {
+            let out = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("DemoOut")
+            try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+            var log = "items \(roll.items.count)\n"
+            let keepSaving = prefs.saveToPhotos
+            prefs.saveToPhotos = false            // the simulator's Photos prompt would block
+            defer { prefs.saveToPhotos = keepSaving }
+            if args.contains("-demoDouble"), roll.items.count >= 2 {
+                do {
+                    let item = try await doubleExposure(roll.items[1], roll.items[0])
+                    try FileManager.default.copyItem(at: item.url, to: out.appendingPathComponent("double.jpg"))
+                } catch { log += "double: \(error)\n" }
+            }
+            if args.contains("-demoSheet") {
+                do {
+                    let url = try await contactSheet(roll.items, progress: { _, _ in })
+                    try? FileManager.default.removeItem(at: out.appendingPathComponent("sheet.jpg"))
+                    try FileManager.default.copyItem(at: url, to: out.appendingPathComponent("sheet.jpg"))
+                } catch { log += "sheet: \(error)\n" }
+            }
+            try? log.write(to: out.appendingPathComponent("log.txt"), atomically: true, encoding: .utf8)
+            return
+        }
         // `-demoInput`: develop every image in Documents/DemoInput on every stock.
         if args.contains("-demoInput") {
             let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("DemoInput")

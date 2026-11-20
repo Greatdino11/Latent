@@ -348,3 +348,54 @@ final class StockCodeTests: XCTestCase {
         XCTAssertNil(StockCode.decode("LTN1-notbase64!!"))
     }
 }
+
+final class DoubleExposureTests: XCTestCase {
+    private let ctx = CIContext(options: [.cacheIntermediates: false])
+    private let linear = CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!
+
+    private func grey(_ v: Double, _ w: CGFloat, _ h: CGFloat) -> CIImage {
+        CIImage(color: CIColor(red: v, green: v, blue: v, alpha: 1, colorSpace: linear)!).cropped(to: CGRect(x: 0, y: 0, width: w, height: h))
+    }
+
+    private func value(_ image: CIImage, at p: CGPoint) -> Float {
+        var px = [Float](repeating: 0, count: 4)
+        ctx.render(image, toBitmap: &px, rowBytes: 16, bounds: CGRect(x: p.x, y: p.y, width: 1, height: 1), format: .RGBAf, colorSpace: linear)
+        return px[1]
+    }
+
+    /// Two mid-grey exposures add up to one mid-grey exposure, on the first frame's canvas.
+    func testTwoExposuresAddToOne() {
+        let out = Darkroom.superimpose(grey(0.18, 300, 200), grey(0.18, 200, 300))
+        XCTAssertEqual(out.extent, CGRect(x: 0, y: 0, width: 300, height: 200))
+        for p in [CGPoint(x: 1, y: 1), CGPoint(x: 150, y: 100), CGPoint(x: 298, y: 198)] {
+            XCTAssertEqual(value(out, at: p), 0.18, accuracy: 0.003)
+        }
+    }
+
+    /// A bright second exposure shows through over a dark first one.
+    func testSecondFrameShowsThrough() {
+        let out = Darkroom.superimpose(grey(0, 100, 100), grey(0.5, 100, 100))
+        XCTAssertEqual(value(out, at: CGPoint(x: 50, y: 50)), 0.25, accuracy: 0.003)
+    }
+}
+
+final class ContactSheetTests: XCTestCase {
+    private func frame(_ w: Int, _ h: Int, _ n: Int) -> ContactSheet.Frame {
+        let c = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                          bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        c.setFillColor(gray: 0.5, alpha: 1); c.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        return .init(image: c.makeImage()!, number: n, stock: "Honey 200")
+    }
+
+    func testStripsOfSix() throws {
+        let one = try XCTUnwrap(ContactSheet.render([frame(30, 20, 1)], title: "T", seed: 1))
+        let seven = try XCTUnwrap(ContactSheet.render((1...7).map { frame($0 % 2 == 0 ? 20 : 30, $0 % 2 == 0 ? 30 : 20, $0) }, title: "T", seed: 1))
+        XCTAssertEqual(one.width, seven.width, "strips are always six frames wide")
+        XCTAssertGreaterThan(seven.height, one.height, "a seventh frame starts a second strip")
+        XCTAssertGreaterThan(one.width, one.height)
+    }
+
+    func testEmptyRollHasNoSheet() {
+        XCTAssertNil(ContactSheet.render([], title: "T", seed: 1))
+    }
+}

@@ -85,6 +85,7 @@ private struct RollGrid: View {
     @State private var status: String?
     @State private var busy = false
     @State private var confirmDelete = false
+    @State private var sheetURL: URL?
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 2), count: 3)
     private var chosenItems: [RollItem] { model.roll.items.filter { chosen.contains($0.id) } }
@@ -166,6 +167,9 @@ private struct RollGrid: View {
             picks = []
             Task { await model.importPhotos(new) }
         }
+        .sheet(isPresented: Binding(get: { sheetURL != nil }, set: { if !$0 { sheetURL = nil } })) {
+            if let url = sheetURL { ContactSheetView(url: url) }
+        }
         .confirmationDialog("Delete \(chosen.count) frames and their negatives?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 for item in chosenItems { model.roll.delete(item) }
@@ -188,6 +192,10 @@ private struct RollGrid: View {
                     Button(stock.displayName) { run("Developing") { try await model.reprint($0, stock: stock) } }
                 }
             } label: { Label("Re-develop as…", systemImage: "film") }
+            Button { makeContactSheet() } label: { Label("Contact sheet", systemImage: "squares.below.rectangle") }
+            if chosenItems.count == 2, chosenItems.allSatisfy(\.hasNegative) {
+                Button { makeDoubleExposure() } label: { Label("Double exposure", systemImage: "circle.circle") }
+            }
             Button { run("Reprinting") { try await model.reprint($0) } } label: {
                 Label("Reprint with current settings", systemImage: "arrow.clockwise")
             }
@@ -196,6 +204,34 @@ private struct RollGrid: View {
             RoundIcon(systemName: "ellipsis", tint: chosen.isEmpty ? Theme.dim : Theme.label)
         }
         .disabled(chosen.isEmpty || busy)
+    }
+
+    private func makeContactSheet() {
+        let items = chosenItems
+        busy = true
+        Task {
+            do {
+                sheetURL = try await model.contactSheet(items) { i, n in status = "Printing contact sheet \(i) of \(n)…" }
+                status = items.count > ContactSheet.maxFrames ? "Contact sheet of the first \(ContactSheet.maxFrames) frames" : nil
+            } catch { status = error.localizedDescription }
+            busy = false
+        }
+    }
+
+    private func makeDoubleExposure() {
+        // The earlier-taken frame is the base exposure.
+        let pair = chosenItems.sorted { $0.date < $1.date }
+        guard pair.count == 2 else { return }
+        busy = true
+        status = "Exposing twice…"
+        Task {
+            do {
+                let item = try await model.doubleExposure(pair[0], pair[1])
+                status = nil; selecting = false; chosen = []
+                open(item.id)
+            } catch { status = error.localizedDescription }
+            busy = false
+        }
     }
 
     /// Runs an action over the selected frames one at a time, with progress.
@@ -670,5 +706,40 @@ private struct PagerImage: View {
         .task(id: item) {
             if let fresh = await model.roll.thumbnail(for: item, maxPixel: 2400) { image = fresh }
         }
+    }
+}
+
+/// The finished contact sheet: zoomable preview, save to Photos, share.
+private struct ContactSheetView: View {
+    let url: URL
+    @Environment(\.dismiss) private var dismiss
+    @State private var image: UIImage?
+    @State private var zoomed = false
+    @State private var status: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ZoomableImage(image: image, zoomed: $zoomed)
+                .background(Color.black)
+            if let status { Text(status).font(Theme.mono(11)).foregroundStyle(Theme.dim).padding(.top, 6) }
+            RollBottomBar {
+                Button {
+                    Task {
+                        do {
+                            _ = try await PhotoLibrary.create(print: try Data(contentsOf: url), original: nil, recipe: Data(), location: nil, date: Date())
+                            status = "Saved to Photos"
+                        }
+                        catch { status = error.localizedDescription }
+                    }
+                } label: { RoundIcon(systemName: "square.and.arrow.down") }
+                .buttonStyle(.plain)
+            } center: {
+                dismiss()
+            } trailing: {
+                ShareLink(item: url) { RoundIcon(systemName: "square.and.arrow.up") }
+            }
+        }
+        .background(Theme.body.ignoresSafeArea())
+        .task { image = RollStore.downsample(url, maxPixel: 4000) }
     }
 }
