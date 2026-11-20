@@ -27,6 +27,23 @@ struct Viewfinder: View {
                                 .allowsHitTesting(false)
                         }
                         if let p = focusPoint { FocusReticle().position(p).allowsHitTesting(false) }
+                        if model.camera.aeafLocked {
+                            Text("AE/AF LOCK")
+                                .font(Theme.mono(10, .bold)).foregroundStyle(.black)
+                                .padding(.horizontal, 8).padding(.vertical, 4)
+                                .background(Theme.amber, in: Capsule())
+                                .position(x: frame.midX, y: frame.minY + 18)
+                                .allowsHitTesting(false)
+                        }
+                        if let n = model.countdown {
+                            Text("\(n)")
+                                .font(.system(size: 96, weight: .bold, design: .monospaced)).foregroundStyle(Theme.amber)
+                                .shadow(color: .black.opacity(0.6), radius: 8)
+                                .contentTransition(.numericText(countsDown: true))
+                                .animation(.snappy, value: n)
+                                .position(x: frame.midX, y: frame.midY)
+                                .allowsHitTesting(false)
+                        }
                         Color.black.opacity(blink ? 1 : 0).allowsHitTesting(false)
                     }
                     .animation(.snappy, value: prefs.aspect)
@@ -58,6 +75,10 @@ struct Viewfinder: View {
                 Task { try? await Task.sleep(for: .seconds(1.2)); focusPoint = nil }
             }, onDoubleTap: {
                 Task { await model.camera.flip() }
+            }, onLongPress: { layer, device in
+                model.camera.lock(at: device)
+                focusPoint = layer
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             })
         case .unauthorized:
             VStack(spacing: 12) {

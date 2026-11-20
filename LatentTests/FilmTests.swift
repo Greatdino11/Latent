@@ -332,3 +332,19 @@ final class PortraitTests: XCTestCase {
         XCTAssertEqual(back.portraitLens, .swirl); XCTAssertEqual(back.blurAmount, 0.4); XCTAssertEqual(back.focusDepth, 0.7)
     }
 }
+
+final class StockCodeTests: XCTestCase {
+    func testRoundTripAndPasteFromMessage() throws {
+        var c = CustomStock(); c.name = "Beach"; c.baseID = "coast"; c.warmth = 0.4; c.grain = 1.6
+        let code = try XCTUnwrap(StockCode.encode(c))
+        XCTAssert(code.hasPrefix("LTN1-")); XCTAssertLessThan(code.count, 400)
+        let back = try XCTUnwrap(StockCode.decode("Try my stock! \(code) 🎞"))
+        XCTAssertEqual(back.name, "Beach"); XCTAssertEqual(back.baseID, "coast"); XCTAssertEqual(back.warmth, 0.4)
+        XCTAssertNotEqual(back.id, c.id, "imports get a fresh id")
+    }
+
+    func testRejectsGarbage() {
+        XCTAssertNil(StockCode.decode("hello"))
+        XCTAssertNil(StockCode.decode("LTN1-notbase64!!"))
+    }
+}

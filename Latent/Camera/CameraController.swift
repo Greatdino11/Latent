@@ -34,6 +34,8 @@ final class CameraController: NSObject {
     private(set) var hasFrontCamera = false
     /// The current camera can capture depth (for portrait blur).
     private(set) var depthSupported = false
+    /// Focus and exposure are locked (long-press in the viewfinder); a tap unlocks.
+    private(set) var aeafLocked = false
 
     var isSimulated: Bool { status == .simulated }
     var isReady: Bool { status == .running || status == .simulated }
@@ -48,6 +50,7 @@ final class CameraController: NSObject {
     @ObservationIgnored private var configured = false
     @ObservationIgnored private var wantsRunning = true
     @ObservationIgnored private var wantsPortrait = false
+    @ObservationIgnored private var wantsHighResolution = false
 
     private struct Setup { var ok: Bool; var lenses: [LensOption]; var selected: Int; var flash: Bool; var depth = false }
 
@@ -78,6 +81,7 @@ final class CameraController: NSObject {
 
     @MainActor private func apply(_ setup: Setup) {
         lenses = setup.lenses; selectedLens = setup.selected; hasFlash = setup.flash; depthSupported = setup.depth
+        aeafLocked = false
     }
 
     /// Portrait mode swaps ProRAW for processed capture with depth (iOS can't deliver depth with RAW).
@@ -149,12 +153,25 @@ final class CameraController: NSObject {
         return candidates.max { score($0) < score($1) }
     }
 
-    /// 12MP keeps RAW files and develop times reasonable (48MP ProRAW is ~75MB a frame).
+    /// 12MP by default (smaller RAWs, quicker develops); the largest the format offers (48MP on the main camera)
+    /// when high resolution is on. Portrait's depth formats top out at 12MP anyway.
     private func pickPhotoDimensions(_ dev: AVCaptureDevice) {
         let dims = dev.activeFormat.supportedMaxPhotoDimensions
         let area: (CMVideoDimensions) -> Int = { Int($0.width) * Int($0.height) }
-        if let pick = dims.filter({ area($0) <= 12_600_000 }).max(by: { area($0) < area($1) }) ?? dims.min(by: { area($0) < area($1) }) {
+        let limit = wantsHighResolution ? Int.max : 12_600_000
+        if let pick = dims.filter({ area($0) <= limit }).max(by: { area($0) < area($1) }) ?? dims.min(by: { area($0) < area($1) }) {
             photoOutput.maxPhotoDimensions = pick
+        }
+    }
+
+    /// Switches between 12MP and 48MP capture.
+    func setHighResolution(_ on: Bool) {
+        queue.async {
+            self.wantsHighResolution = on
+            guard self.configured, let dev = self.device else { return }
+            self.session.beginConfiguration()
+            self.pickPhotoDimensions(dev)
+            self.session.commitConfiguration()
         }
     }
 
@@ -280,6 +297,7 @@ final class CameraController: NSObject {
 
     /// `point` is in device coordinates (0…1, landscape-right sensor space).
     func focus(at point: CGPoint) {
+        Task { @MainActor in aeafLocked = false }
         queue.async {
             guard let d = self.device, (try? d.lockForConfiguration()) != nil else { return }
             if d.isFocusPointOfInterestSupported, d.isFocusModeSupported(.autoFocus) {
@@ -289,6 +307,24 @@ final class CameraController: NSObject {
                 d.exposurePointOfInterest = point; d.exposureMode = .continuousAutoExposure
             }
             d.isSubjectAreaChangeMonitoringEnabled = true
+            d.unlockForConfiguration()
+        }
+    }
+
+    /// Focuses and meters at `point` once, then holds both until the next tap (device coordinates).
+    @MainActor
+    func lock(at point: CGPoint) {
+        aeafLocked = true
+        guard !isSimulated else { return }
+        queue.async {
+            guard let d = self.device, (try? d.lockForConfiguration()) != nil else { return }
+            if d.isFocusPointOfInterestSupported, d.isFocusModeSupported(.autoFocus) {
+                d.focusPointOfInterest = point; d.focusMode = .autoFocus          // focuses once, then stays put
+            }
+            if d.isExposurePointOfInterestSupported, d.isExposureModeSupported(.autoExpose) {
+                d.exposurePointOfInterest = point; d.exposureMode = .autoExpose   // meters once, then locks
+            }
+            d.isSubjectAreaChangeMonitoringEnabled = false
             d.unlockForConfiguration()
         }
     }

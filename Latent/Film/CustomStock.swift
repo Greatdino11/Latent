@@ -79,3 +79,30 @@ enum StockRegistry {
         return stocks[id]
     }
 }
+
+/// Custom stocks as short text codes ("LTN1-…"), so they can be sent in a message and pasted into another Latent.
+enum StockCode {
+    static let prefix = "LTN1-"
+
+    static func encode(_ custom: CustomStock) -> String? {
+        guard let json = try? JSONEncoder().encode(custom),
+              let packed = try? (json as NSData).compressed(using: .zlib) as Data else { return nil }
+        let b64 = packed.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        return prefix + b64
+    }
+
+    /// Finds a code anywhere in `text` (so a whole pasted message works) and returns it as a new stock.
+    static func decode(_ text: String) -> CustomStock? {
+        guard let start = text.range(of: prefix) else { return nil }
+        let body = text[start.upperBound...].prefix { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
+        var b64 = body.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        while b64.count % 4 != 0 { b64 += "=" }
+        guard let packed = Data(base64Encoded: b64),
+              let json = try? (packed as NSData).decompressed(using: .zlib) as Data,
+              var custom = try? JSONDecoder().decode(CustomStock.self, from: json),
+              FilmStock.builtIn(id: custom.baseID) != nil else { return nil }
+        custom.id = CustomStock().id          // a fresh copy, never overwriting one you already have
+        return custom
+    }
+}

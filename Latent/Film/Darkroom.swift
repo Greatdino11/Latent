@@ -20,7 +20,7 @@ actor Darkroom {
     func develop(_ frame: CapturedFrame, stock: FilmStock, options: DevelopOptions) throws -> DevelopResult {
         var clock = Stopwatch("develop \(stock.id)")
         var options = options
-        let (decoded, sceneReferred) = try decode(frame)
+        let (decoded, sceneReferred) = try decode(frame, fullResolution: options.fullResolution == true)
         // Decode once: the negative, lab exposure, flare detection and the print all read this buffer instead
         // of each re-running the (expensive) RAW demosaic.
         let scene = try materialize(decoded)
@@ -98,6 +98,15 @@ actor Darkroom {
         let jpeg = try JPEGEncoder.encode(finished, metadata: metadata)
         clock.lap("finish+jpeg")
         return jpeg
+    }
+
+    /// The frame as it came out of the camera: same crop and exposure, but a plain neutral print with none of the
+    /// film's colour, grain, glow, leaks, flare or lens blur. For "hold to compare" in the roll.
+    func original(negative: Data, recipe: DevelopOptions, maxPixel: CGFloat = 2000) throws -> CGImage {
+        var o = recipe
+        o.portraitLens = nil; o.lightLeak = nil; o.dust = nil; o.flareAmount = 0; o.halation = false; o.grainAmount = 0
+        o.frame = .none; o.dateStamp = false
+        return try preview(negative: negative, recipe: o, stock: .neutral, maxPixel: maxPixel)
     }
 
     /// A quick, small print for the stock editor: the negative (or the test scene) scaled down, printed through a
@@ -218,7 +227,7 @@ actor Darkroom {
 
     /// Turns the capture into scene-linear light. ProRAW is decoded neutrally: no local tone mapping, no
     /// sharpening, no "boost" curve. That removes the phone look; the film curve does the tone instead.
-    private func decode(_ frame: CapturedFrame) throws -> (CIImage, Bool) {
+    private func decode(_ frame: CapturedFrame, fullResolution: Bool = false) throws -> (CIImage, Bool) {
         switch frame.source {
         case .image(let image, let sceneReferred):
             return (image, sceneReferred)
@@ -229,7 +238,7 @@ actor Darkroom {
             // Decode big RAWs (48MP ProRAW imports) at ~12MP: same as Latent's own frames, a quarter of the memory.
             let native = raw.nativeSize
             let pixels = native.width * native.height
-            if pixels > 13_000_000 { raw.scaleFactor = Float((12_200_000 / pixels).squareRoot()) }
+            if pixels > 13_000_000, !fullResolution { raw.scaleFactor = Float((12_200_000 / pixels).squareRoot()) }
             raw.boostAmount = 0
             raw.extendedDynamicRangeAmount = 1
             if raw.isLocalToneMapSupported { raw.localToneMapAmount = 0 }

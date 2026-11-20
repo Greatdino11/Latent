@@ -48,6 +48,8 @@ final class AppModel {
     private(set) var lastDevelopSeconds: Double?
     /// Frames waiting to be developed at once. Each ProRAW frame is ~25 MB in memory until it's done.
     static let maxPending = 3
+    /// At 48MP each waiting frame is ~4x the memory: develop one at a time.
+    var maxPending: Int { prefs.highResolution ? 1 : Self.maxPending }
 
     /// The roll or settings is covering the viewfinder: the sensor and sensors-for-UI can rest.
     var viewfinderCovered = false { didSet { updateSensors() } }
@@ -55,6 +57,7 @@ final class AppModel {
 
     func launch() async {
         FilmAdvanceSound.configureSession()   // never interrupt music or podcasts
+        camera.setHighResolution(prefs.highResolution)
         await camera.start()
         updateSensors()
         orientation.start()
@@ -73,9 +76,36 @@ final class AppModel {
 
     // MARK: capture
 
+    /// Self-timer: 0 (off), 3 or 10 seconds.
+    var timerSeconds = 0
+    /// Seconds left on a running self-timer.
+    private(set) var countdown: Int?
+    @ObservationIgnored private var countdownTask: Task<Void, Never>?
+
+    /// The shutter: starts the self-timer when one is set (pressing again cancels it), otherwise shoots.
     func capture() {
+        if countdownTask != nil {
+            countdownTask?.cancel(); countdownTask = nil; countdown = nil
+            Feedback.selection()
+            return
+        }
+        guard timerSeconds > 0 else { fire(); return }
+        countdownTask = Task {
+            for left in stride(from: timerSeconds, through: 1, by: -1) {
+                countdown = left
+                Feedback.selection()
+                try? await Task.sleep(for: .seconds(1))
+                if Task.isCancelled { return }
+            }
+            countdown = nil
+            countdownTask = nil
+            fire()
+        }
+    }
+
+    private func fire() {
         guard camera.isReady else { return }
-        guard developingCount < Self.maxPending else {
+        guard developingCount < maxPending else {
             show("Developing… one moment")
             return
         }
@@ -97,6 +127,7 @@ final class AppModel {
             date: Date()
         )
         o.strength = prefs.strength(for: stock)
+        if prefs.highResolution { o.fullResolution = true }
         if prefs.lightLeak > 0 { o.lightLeak = prefs.lightLeak }
         if portrait { o.portraitLens = prefs.portraitLens; o.blurAmount = prefs.blurAmount }
         if prefs.dust { o.dust = true }

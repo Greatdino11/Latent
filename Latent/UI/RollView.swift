@@ -253,6 +253,9 @@ private struct PhotoPager: View {
     var close: () -> Void
     var exit: () -> Void
 
+    @State private var comparing = false
+    @State private var original: UIImage?
+    @State private var originalFor: String?
     @State private var tool: DevelopTool = ProcessInfo.processInfo.arguments.contains("-frameTool") ? .frame : .film
     @State private var developing = false
     @State private var dirty = false
@@ -289,6 +292,20 @@ private struct PhotoPager: View {
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
+            .overlay {
+                if comparing, let original {
+                    ZStack(alignment: .top) {
+                        Theme.body
+                        Image(uiImage: original).resizable().scaledToFit().frame(maxWidth: .infinity, maxHeight: .infinity)
+                        Text("ORIGINAL").font(Theme.mono(11, .bold)).foregroundStyle(.black)
+                            .padding(.horizontal, 8).padding(.vertical, 4).background(Theme.amber, in: Capsule()).padding(.top, 10)
+                    }
+                    .allowsHitTesting(false)
+                }
+            }
+            .overlay(alignment: .bottomLeading) {
+                if item?.hasNegative == true { compareButton.padding(12) }
+            }
             .offset(y: drag)
             .opacity(1 - Double(min(drag, 300)) / 600)
             .simultaneousGesture(
@@ -341,6 +358,38 @@ private struct PhotoPager: View {
     }
 
     // MARK: pieces
+
+    /// Hold to see the frame before the film: the neutral print of its negative.
+    private var compareButton: some View {
+        Image(systemName: "circle.lefthalf.filled")
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(comparing ? .black : Theme.label)
+            .frame(width: 40, height: 40)
+            .background(Circle().fill(comparing ? Theme.amber : Color.black.opacity(0.55)))
+            .contentShape(Circle())
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    guard !comparing else { return }
+                    comparing = true
+                    Feedback.selection()
+                    loadOriginal()
+                }
+                .onEnded { _ in comparing = false })
+            .accessibilityLabel("Hold to compare with the original")
+    }
+
+    private func loadOriginal() {
+        guard let item, originalFor != item.url.lastPathComponent + "\(item.stamp)" else { return }
+        let key = item.url.lastPathComponent + "\(item.stamp)"
+        let recipe = model.roll.recipe(for: item)
+        guard let negative = try? Data(contentsOf: item.negativeURL) else { return }
+        original = nil
+        Task {
+            if let cg = try? await Darkroom.shared.original(negative: negative, recipe: recipe) {
+                original = UIImage(cgImage: cg); originalFor = key
+            }
+        }
+    }
 
     private func caption(_ item: RollItem) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 14) {

@@ -98,7 +98,7 @@ private struct TopBar: View {
     var body: some View {
         let prefs = model.prefs
         let turn = model.orientation.angle
-        HStack(spacing: 18) {
+        HStack(spacing: 14) {
             if model.camera.hasFlash || (model.camera.isSimulated && model.camera.position == .back) {
                 Button { model.flash = model.flash.next } label: {
                     Image(systemName: model.flash.icon)
@@ -110,6 +110,7 @@ private struct TopBar: View {
             Button { withAnimation(.snappy) { prefs.aspect = prefs.aspect.next } } label: {
                 Text(prefs.aspect.label)
                     .font(Theme.mono(12, .semibold))
+                    .lineLimit(1).fixedSize()
                     .padding(.horizontal, 8).padding(.vertical, 4)
                     .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.dim, lineWidth: 1))
             }
@@ -117,8 +118,21 @@ private struct TopBar: View {
                 Image(systemName: "grid").foregroundStyle(prefs.showGrid ? Theme.amber : Theme.label)
                     .rotationEffect(turn)
             }
+            Button {
+                model.timerSeconds = model.timerSeconds == 0 ? 3 : model.timerSeconds == 3 ? 10 : 0
+                Feedback.selection()
+            } label: {
+                HStack(spacing: 2) {
+                    Image(systemName: "timer")
+                    if model.timerSeconds > 0 { Text("\(model.timerSeconds)").font(Theme.mono(11, .bold)) }
+                }
+                .foregroundStyle(model.timerSeconds > 0 ? Theme.amber : Theme.label)
+                .rotationEffect(turn)
+            }
+            .accessibilityLabel(model.timerSeconds == 0 ? "Self-timer off" : "Self-timer \(model.timerSeconds) seconds")
             Spacer()
-            Text(String(format: "№ %03d", model.roll.items.count))
+            Text(String(format: "№%03d", model.roll.items.count))
+                .lineLimit(1).fixedSize()
                 .rotationEffect(turn)
                 .font(Theme.mono(13, .semibold))
                 .foregroundStyle(Theme.amber)

@@ -88,6 +88,13 @@ struct StockEditorView: View {
         }
         .navigationTitle(isNew ? "New stock" : custom.name)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if !isNew, let code = StockCode.encode(custom) {
+                ShareLink(item: "\(custom.name) — a Latent film stock. Paste in Latent ▸ Settings ▸ Stocks ▸ Add from code:\n\(code)") {
+                    Image(systemName: "square.and.arrow.up")
+                }
+            }
+        }
         .confirmationDialog("Delete \(custom.name)?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { model.prefs.delete(custom); dismiss() }
         } message: { Text("Photos already printed with it keep their prints.") }

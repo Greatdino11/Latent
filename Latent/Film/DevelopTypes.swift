@@ -76,6 +76,8 @@ struct DevelopOptions: Codable {
     /// Where the crop sits along its free direction: −1 … 1 (nil/0 = centred). +1 is the top for a frame cropped
     /// top-to-bottom and the right for one cropped side-to-side. Only moves the frame — never zooms or rotates.
     var cropShift: Double? = nil
+    /// Develop large RAWs at full resolution (48MP) instead of ~12MP.
+    var fullResolution: Bool? = nil
     /// Light leak strength (0…1); nil = none.
     var lightLeak: Double? = nil
     /// Dust specks and hairline scratches from the "scan".

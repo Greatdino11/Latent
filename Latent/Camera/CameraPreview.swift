@@ -6,6 +6,7 @@ struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
     var onTap: (_ layerPoint: CGPoint, _ devicePoint: CGPoint) -> Void
     var onDoubleTap: () -> Void = {}
+    var onLongPress: (_ layerPoint: CGPoint, _ devicePoint: CGPoint) -> Void = { _, _ in }
 
     func makeUIView(context: Context) -> PreviewView {
         let v = PreviewView()
@@ -13,10 +14,11 @@ struct CameraPreview: UIViewRepresentable {
         v.previewLayer.videoGravity = .resizeAspectFill
         v.onTap = onTap
         v.onDoubleTap = onDoubleTap
+        v.onLongPress = onLongPress
         return v
     }
 
-    func updateUIView(_ v: PreviewView, context: Context) { v.onTap = onTap; v.onDoubleTap = onDoubleTap }
+    func updateUIView(_ v: PreviewView, context: Context) { v.onTap = onTap; v.onDoubleTap = onDoubleTap; v.onLongPress = onLongPress }
 }
 
 final class PreviewView: UIView {
@@ -24,6 +26,7 @@ final class PreviewView: UIView {
     var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
     var onTap: ((CGPoint, CGPoint) -> Void)?
     var onDoubleTap: (() -> Void)?
+    var onLongPress: ((CGPoint, CGPoint) -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -36,9 +39,18 @@ final class PreviewView: UIView {
         single.require(toFail: double)
         addGestureRecognizer(double)
         addGestureRecognizer(single)
+        let hold = UILongPressGestureRecognizer(target: self, action: #selector(held(_:)))
+        hold.minimumPressDuration = 0.5
+        addGestureRecognizer(hold)
     }
 
     @objc private func doubleTapped() { onDoubleTap?() }
+
+    @objc private func held(_ g: UILongPressGestureRecognizer) {
+        guard g.state == .began else { return }
+        let p = g.location(in: self)
+        onLongPress?(p, previewLayer.captureDevicePointConverted(fromLayerPoint: p))
+    }
     required init?(coder: NSCoder) { fatalError() }
 
     override func layoutSubviews() {

@@ -16,6 +16,8 @@ final class Preferences {
     /// Light leaks on new frames: 0 off, 0.5 subtle, 1 strong.
     var lightLeak: Double { didSet { d.set(lightLeak, forKey: "lightLeak") } }
     var dust: Bool { didSet { d.set(dust, forKey: "dust") } }
+    /// 48MP ProRAW (main camera) instead of 12MP.
+    var highResolution: Bool { didSet { d.set(highResolution, forKey: "hires") } }
     var portraitLens: PortraitLens { didSet { d.set(portraitLens.rawValue, forKey: "portraitLens") } }
     var blurAmount: Double { didSet { d.set(blurAmount, forKey: "blurAmount") } }
     var saveToPhotos: Bool { didSet { d.set(saveToPhotos, forKey: "saveToPhotos") } }
@@ -45,7 +47,7 @@ final class Preferences {
     init() {
         d.register(defaults: [
             "selectedStock": FilmStock.randomID, "aspect": AspectRatio.r3x2.rawValue, "grain": 1.0,
-            "halation": true, "flareAmount": 0.6, "dateStamp": false, "frame": FrameStyle.none.rawValue, "lightLeak": 0.0, "dust": false, "portraitLens": PortraitLens.classic.rawValue, "blurAmount": 0.6,
+            "halation": true, "flareAmount": 0.6, "dateStamp": false, "frame": FrameStyle.none.rawValue, "lightLeak": 0.0, "dust": false, "hires": false, "portraitLens": PortraitLens.classic.rawValue, "blurAmount": 0.6,
             "saveToPhotos": true, "saveOriginal": false, "grid": false, "level": true,
             "saveLocation": false, "haptics": true, "advanceSound": false, "bigReveal": false,
         ])
@@ -61,6 +63,7 @@ final class Preferences {
         frameStyle = FrameStyle(rawValue: d.string(forKey: "frame") ?? "") ?? .none
         lightLeak = d.double(forKey: "lightLeak")
         dust = d.bool(forKey: "dust")
+        highResolution = d.bool(forKey: "hires")
         portraitLens = PortraitLens(rawValue: d.string(forKey: "portraitLens") ?? "") ?? .classic
         blurAmount = d.double(forKey: "blurAmount")
         saveToPhotos = d.bool(forKey: "saveToPhotos")

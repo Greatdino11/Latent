@@ -353,6 +353,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = X3PZX4A3BL;
 				GENERATE_INFOPLIST_FILE = YES;
+				CODE_SIGN_ENTITLEMENTS = Latent/Latent.entitlements;
 				INFOPLIST_KEY_CFBundleDisplayName = Latent;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Latent needs the camera to take photos.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Latent can tag photos with where they were taken.";
@@ -384,6 +385,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = X3PZX4A3BL;
 				GENERATE_INFOPLIST_FILE = YES;
+				CODE_SIGN_ENTITLEMENTS = Latent/Latent.entitlements;
 				INFOPLIST_KEY_CFBundleDisplayName = Latent;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Latent needs the camera to take photos.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Latent can tag photos with where they were taken.";
@@ -413,6 +415,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = X3PZX4A3BL;
 				GENERATE_INFOPLIST_FILE = YES;
+				CODE_SIGN_ENTITLEMENTS = LatentControls/LatentControls.entitlements;
 				INFOPLIST_FILE = "LatentControls-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Latent;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
@@ -438,6 +441,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = X3PZX4A3BL;
 				GENERATE_INFOPLIST_FILE = YES;
+				CODE_SIGN_ENTITLEMENTS = LatentControls/LatentControls.entitlements;
 				INFOPLIST_FILE = "LatentControls-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Latent;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;

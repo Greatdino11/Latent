@@ -64,13 +64,17 @@ struct SettingsView: View {
                     Picker("Aspect ratio", selection: $prefs.aspect) {
                         ForEach(AspectRatio.allCases) { Text($0.label).tag($0) }
                     }
+                    Picker("Resolution", selection: $prefs.highResolution) {
+                        Text("12MP").tag(false); Text("48MP").tag(true)
+                    }
+                    .onChange(of: prefs.highResolution) { _, on in model.camera.setHighResolution(on) }
                     Toggle("Grid", isOn: $prefs.showGrid)
                     Toggle("Level", isOn: $prefs.showLevel)
                     Toggle("Full-screen reveal", isOn: $prefs.bigReveal)
                     Toggle("Haptics", isOn: $prefs.haptics)
                     Toggle("Film advance sound", isOn: $prefs.advanceSound)
                 } header: { Text("Capture") } footer: {
-                    Text("The volume buttons also take a photo. Double-tap the viewfinder to switch cameras. Full-screen reveal shows each frame developing (in Random mode, that's when you find out the stock).")
+                    Text("The volume buttons also take a photo. Double-tap the viewfinder to switch cameras; long-press it to lock focus and exposure (tap to unlock). 48MP works on the 1× camera with ProRAW: about 75 MB a photo and slower to develop. Full-screen reveal shows each frame developing (in Random mode, that's when you find out the stock).")
                 }
                 Section {
                     Toggle("Tag location", isOn: $prefs.saveLocation)
@@ -196,6 +200,9 @@ struct SettingsView: View {
 
 struct StockManagerView: View {
     @Environment(AppModel.self) private var model
+    @State private var showPaste = false
+    @State private var pasteCode = ""
+    @State private var codeStatus: String?
 
     var body: some View {
         let prefs = model.prefs
@@ -223,6 +230,10 @@ struct StockManagerView: View {
                 } label: {
                     Label("New stock", systemImage: "plus.circle.fill").foregroundStyle(Theme.amber)
                 }
+                Button { pasteCode = ""; showPaste = true } label: {
+                    Label("Add from code", systemImage: "doc.on.clipboard").foregroundStyle(Theme.amber)
+                }
+                if let codeStatus { Text(codeStatus).font(.footnote).foregroundStyle(.secondary) }
             } header: { Text("Your stocks") } footer: {
                 Text("Start from any stock and adjust colour, contrast and texture with a live preview. Your stocks appear in the camera, Random and the roll.")
             }
@@ -271,6 +282,17 @@ struct StockManagerView: View {
                 Text("Drag to reorder. The eye hides a stock from the strip. Dice marks the stocks Random may choose; with none marked, Random uses every visible stock. LOOK sets how strongly each stock is applied to new frames.")
             }
         }
+        .alert("Add stock from code", isPresented: $showPaste) {
+            TextField("LTN1-…", text: $pasteCode)
+            Button("Add") {
+                if let custom = StockCode.decode(pasteCode) {
+                    model.prefs.save(custom); codeStatus = "Added \(custom.name)."
+                } else {
+                    codeStatus = "That doesn't look like a Latent stock code."
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Paste a code someone shared with you (the whole message is fine).") }
         .navigationTitle("Stocks")
         .toolbar { EditButton() }
     }
