@@ -134,6 +134,22 @@ actor Darkroom {
         return try preview(negative: negative, recipe: o, stock: .neutral, maxPixel: maxPixel)
     }
 
+    /// A frame for the contact sheet: the whole 3:2 negative (as it sits on the film, uncropped), plus where the
+    /// frame's own crop falls inside it — normalised, top-left origin — when it's tighter than the full frame.
+    func contactFrame(negative: Data, recipe: DevelopOptions, stock: FilmStock, maxPixel: CGFloat) throws -> (CGImage, CGRect?) {
+        guard let stored = CIImage(data: negative) else { throw DarkroomError.decode }
+        let e = NegativeCodec.decode(stored, format: recipe.negativeFormat).extent
+        var o = recipe
+        o.aspect = .r3x2; o.cropShift = nil; o.lightLeak = nil
+        let image = try preview(negative: negative, recipe: o, stock: stock, maxPixel: maxPixel)
+        let full = FilmPipeline.cropRect(e, to: .r3x2)
+        let chosen = FilmPipeline.cropRect(e, to: recipe.aspect, shift: recipe.cropShift ?? 0).intersection(full)
+        guard !chosen.isNull, chosen.width * chosen.height < full.width * full.height * 0.97 else { return (image, nil) }
+        let mark = CGRect(x: (chosen.minX - full.minX) / full.width, y: (full.maxY - chosen.maxY) / full.height,
+                          width: chosen.width / full.width, height: chosen.height / full.height)
+        return (image, mark)
+    }
+
     /// A quick, small print for the stock editor: the negative (or the test scene) scaled down, printed through a
     /// coarse 25³ table that's built fresh each time and never cached.
     func preview(negative: Data?, recipe: DevelopOptions?, stock: FilmStock, maxPixel: CGFloat = 900) throws -> CGImage {
