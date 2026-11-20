@@ -29,6 +29,8 @@ struct FilmStock: Identifiable, Hashable {
     var contrast = RGB(0.62, 0.62, 0.62)   // slope of each channel's log S-curve (per stop)
     var balance = RGB(0, 0, 0)             // per-channel shift in stops; unequal values give colour crossover
     var black = RGB(0.06, 0.06, 0.06)      // print black (lifted, often tinted)
+    /// Shadow slope relative to `contrast` (< 1 = a longer, gentler toe that keeps detail in shade).
+    var toe = 1.0
     var white = RGB(0.97, 0.96, 0.92)      // print white (creamy, never pure)
 
     // Colour (applied in scene-linear before the curve)
@@ -67,11 +69,13 @@ struct FilmStock: Identifiable, Hashable {
     }
 
     /// Raw scene light is much flatter than a phone's processed image. Calibrated on real iPhone ProRAW: give RAW
-    /// prints more midtone contrast and slightly deeper (still tinted) blacks so they aren't milky.
+    /// prints more midtone contrast and slightly deeper (still tinted) blacks so they aren't milky — but a longer,
+    /// gentler toe, so shade in harsh midday sun keeps its detail the way negative film does.
     func forRAW() -> FilmStock {
         var s = self
         s.contrast *= 1.15
         s.black *= 0.8
+        s.toe *= 0.78
         return s
     }
 

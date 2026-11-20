@@ -15,7 +15,7 @@ enum LUT {
 
     /// Stable key for the cache file: changes whenever any stock parameter or the table layout changes.
     static func cacheKey(_ stock: FilmStock, expandSDR: Bool) -> String {
-        let text = "v3|\(dimension)|\(headroom)|\(expandSDR)|\(String(describing: stock))"
+        let text = "v4|\(dimension)|\(headroom)|\(expandSDR)|\(String(describing: stock))"
         var hash: UInt64 = 0xcbf29ce484222325
         for byte in text.utf8 { hash = (hash ^ UInt64(byte)) &* 0x100000001b3 }
         return "\(stock.id)-\(String(hash, radix: 16))"
@@ -48,7 +48,7 @@ enum LUT {
         var y: RGB
         if let w = s.mono {
             let l = (c * w).sum() / w.sum()
-            let v = curve(l, s.contrast.x, s.balance.x, s.black.x, s.white.x)
+            let v = curve(l, s.contrast.x, s.balance.x, s.black.x, s.white.x, toe: s.toe)
             y = RGB(v, v, v) + (s.white - RGB(repeating: s.white.x)) * v   // let a tinted white tone the paper
         } else {
             c.x *= 1 + 0.12 * s.temperature
@@ -58,9 +58,9 @@ enum LUT {
             let l = RGB(repeating: luma(c))
             c = l + (c - l) * s.saturation
             c = RGB(max(c.x, 0), max(c.y, 0), max(c.z, 0))
-            y = RGB(curve(c.x, s.contrast.x, s.balance.x, s.black.x, s.white.x),
-                    curve(c.y, s.contrast.y, s.balance.y, s.black.y, s.white.y),
-                    curve(c.z, s.contrast.z, s.balance.z, s.black.z, s.white.z))
+            y = RGB(curve(c.x, s.contrast.x, s.balance.x, s.black.x, s.white.x, toe: s.toe),
+                    curve(c.y, s.contrast.y, s.balance.y, s.black.y, s.white.y, toe: s.toe),
+                    curve(c.z, s.contrast.z, s.balance.z, s.black.z, s.white.z, toe: s.toe))
             y = keepHighlightColour(y, scene: c, s)
         }
         let l = luma(y)
@@ -74,7 +74,7 @@ enum LUT {
     static func keepHighlightColour(_ y: RGB, scene c: RGB, _ s: FilmStock) -> RGB {
         let m = max(c.x, c.y, c.z)
         guard s.highlightColour > 0, m > 1e-6 else { return y }
-        let mapped = srgbToLinear(curve(m, s.contrast.y, s.balance.y, s.black.y, s.white.y))
+        let mapped = srgbToLinear(curve(m, s.contrast.y, s.balance.y, s.black.y, s.white.y, toe: s.toe))
         let k = mapped / m
         var hp = RGB(linearToSrgb(c.x * k), linearToSrgb(c.y * k), linearToSrgb(c.z * k))
         let ly = luma(y), lh = luma(hp)
@@ -85,10 +85,10 @@ enum LUT {
 
     /// Film characteristic curve: a sigmoid in log exposure (stops from mid grey), with a slightly
     /// steeper shoulder than toe, mapped between the print's black and white.
-    static func curve(_ x: Double, _ k: Double, _ shift: Double, _ black: Double, _ white: Double) -> Double {
+    static func curve(_ x: Double, _ k: Double, _ shift: Double, _ black: Double, _ white: Double, toe: Double = 1) -> Double {
         guard x > 1e-7 else { return black }
         let e = log2(x / 0.18) + shift
-        let slope = e < 0 ? k : k * 1.1
+        let slope = e < 0 ? k * toe : k * 1.1
         let s = 1 / (1 + exp(-slope * e))
         return black + (white - black) * s
     }

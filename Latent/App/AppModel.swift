@@ -281,7 +281,10 @@ final class AppModel {
                     }
                     continue
                 }
-                for stock in FilmStock.available where isDNGFile || !asRAW || ["honey", "coast", "pine", "valley"].contains(stock.id) {
+                // `-stocks=a,b,c` limits which stocks are rendered.
+                let only = args.first { $0.hasPrefix("-stocks=") }.map { Set($0.dropFirst(8).split(separator: ",").map(String.init)) }
+                for stock in FilmStock.available where (only?.contains(stock.id) ?? true)
+                    && (isDNGFile || !asRAW || ["honey", "coast", "pine", "valley"].contains(stock.id)) {
                     t = t.addingTimeInterval(1)
                     var options = currentOptions(for: stock); options.date = t
                     let isDNG = ["dng", "nef", "cr2", "cr3", "arw", "raf", "orf", "rw2"].contains(file.pathExtension.lowercased())
