@@ -1,3 +1,4 @@
+import ImageIO
 import PhotosUI
 import SwiftUI
 
@@ -252,7 +253,7 @@ private struct PhotoPager: View {
     var close: () -> Void
     var exit: () -> Void
 
-    @State private var tool: DevelopTool = .film
+    @State private var tool: DevelopTool = ProcessInfo.processInfo.arguments.contains("-frameTool") ? .frame : .film
     @State private var developing = false
     @State private var dirty = false
     @State private var status: String?
@@ -265,6 +266,9 @@ private struct PhotoPager: View {
     @State private var strength = 1.0
     @State private var push = 0.0
     @State private var aspect: AspectRatio?
+    @State private var cropShift = 0.0
+    /// The negative's size, to know which way the crop can slide.
+    @State private var negativeSize: CGSize?
     @State private var dateStamp = false
     @State private var border: FrameStyle = .none
     @State private var leak = 0.0
@@ -367,7 +371,7 @@ private struct PhotoPager: View {
             case .lens: lensTool
             }
         }
-        .frame(height: 112)
+        .frame(height: tool == .frame ? 150 : 112)
         .disabled(false)
     }
 
@@ -464,12 +468,26 @@ private struct PhotoPager: View {
         VStack(spacing: 12) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    chip("FULL", on: aspect == nil) { aspect = nil; apply() }
+                    chip("FULL", on: aspect == nil) { aspect = nil; cropShift = 0; apply() }
                     ForEach(AspectRatio.allCases) { a in
                         chip(a.label, on: aspect == a) { aspect = a; apply() }
                     }
                 }
                 .padding(.horizontal, 16)
+            }
+            if let size = negativeSize, let axis = FilmPipeline.slideAxis(width: size.width, height: size.height, aspect: aspect) {
+                // Slide the frame along its one free direction (the slider runs top→bottom or left→right).
+                HStack(spacing: 10) {
+                    Image(systemName: axis == .vertical ? "arrow.up.and.down" : "arrow.left.and.right")
+                        .font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.dim).frame(width: 40, alignment: .leading)
+                    Text(axis == .vertical ? "top" : "left").font(.caption2).foregroundStyle(Theme.dim)
+                    Slider(value: Binding(get: { axis == .vertical ? -cropShift : cropShift },
+                                          set: { cropShift = axis == .vertical ? -$0 : $0 }),
+                           in: -1...1) { editing in if !editing { apply() } }
+                    Text(axis == .vertical ? "bottom" : "right").font(.caption2).foregroundStyle(Theme.dim)
+                    chip("CENTRE", on: cropShift == 0) { cropShift = 0; apply() }
+                }
+                .padding(.horizontal, 18)
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
@@ -503,6 +521,13 @@ private struct PhotoPager: View {
 
     // MARK: actions
 
+    static func pixelSize(_ url: URL) -> CGSize? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let p = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+              let w = p[kCGImagePropertyPixelWidth] as? CGFloat, let h = p[kCGImagePropertyPixelHeight] as? CGFloat else { return nil }
+        return CGSize(width: w, height: h)
+    }
+
     private func load() {
         status = nil
         guard let item else { return }
@@ -511,6 +536,8 @@ private struct PhotoPager: View {
         strength = r.strength ?? 1
         push = r.pushPull ?? 0
         aspect = r.aspect
+        cropShift = r.cropShift ?? 0
+        negativeSize = Self.pixelSize(item.negativeURL)
         dateStamp = r.dateStamp
         border = r.frame
         leak = r.lightLeak ?? 0
@@ -531,12 +558,14 @@ private struct PhotoPager: View {
         dirty = false
         let stock = FilmStock.with(id: stockID) ?? item.stock
         let (s, p, a, d, b) = (strength, push, aspect, dateStamp, border)
+        let cs = cropShift
         let (lk, du) = (leak, dust)
         let (ln, bl, fc) = (lens, blur, focus)
         Task {
             do {
                 status = try await model.reprint(item, stock: stock) { o in
                     o.strength = s; o.pushPull = p; o.aspect = a; o.dateStamp = d; o.frame = b
+                    o.cropShift = cs == 0 ? nil : cs
                     o.lightLeak = lk > 0 ? lk : nil; o.dust = du ? true : nil
                     o.portraitLens = ln; o.blurAmount = bl; o.focusDepth = fc
                 }

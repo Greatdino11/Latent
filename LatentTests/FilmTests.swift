@@ -75,6 +75,21 @@ final class CropTests: XCTestCase {
         XCTAssertEqual(p.width / p.height, 65.0 / 24.0, accuracy: 0.01)
     }
 
+    /// Sliding moves the frame within the negative, never changes its size, and stops at the edges.
+    func testCropShiftSlidesWithinFrame() {
+        let e = CGRect(x: 0, y: 0, width: 3024, height: 4032)       // portrait 3:4
+        let centred = FilmPipeline.cropRect(e, to: .r1x1)
+        let top = FilmPipeline.cropRect(e, to: .r1x1, shift: 1)
+        let bottom = FilmPipeline.cropRect(e, to: .r1x1, shift: -1)
+        XCTAssertEqual(top.size, centred.size); XCTAssertEqual(bottom.size, centred.size)
+        XCTAssertEqual(top.maxY, e.maxY); XCTAssertEqual(bottom.minY, e.minY)
+        XCTAssertEqual(FilmPipeline.cropRect(e, to: .r1x1, shift: 5), top, "clamped to the edge")
+        XCTAssertEqual(FilmPipeline.slideAxis(width: 3024, height: 4032, aspect: .r1x1), .vertical)
+        XCTAssertEqual(FilmPipeline.slideAxis(width: 3024, height: 4032, aspect: .r3x2), .horizontal)
+        XCTAssertNil(FilmPipeline.slideAxis(width: 3024, height: 4032, aspect: .r4x3), "no room to slide")
+        XCTAssertNil(FilmPipeline.slideAxis(width: 3024, height: 4032, aspect: nil))
+    }
+
     func testFullFrameKeepsEverything() {
         XCTAssertEqual(FilmPipeline.crop(image(4032, 3024), to: nil).extent.size, CGSize(width: 4032, height: 3024))
     }

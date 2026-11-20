@@ -7,7 +7,7 @@ import UIKit
 enum FilmPipeline {
     static func apply(stock: FilmStock, to scene: CIImage, options: DevelopOptions, cube: Data, context: CIContext, labEV: Double = 0,
                       cubeDimension: Int = LUT.dimension, depth: CIImage? = nil) -> CIImage {
-        var img = crop(scene, to: options.aspect)
+        var img = crop(scene, to: options.aspect, shift: options.cropShift ?? 0)
         let extent = img.extent
         let short = min(extent.width, extent.height)
 
@@ -20,7 +20,7 @@ enum FilmPipeline {
             // Crop the (small) depth map the same way as the frame, keeping its own resolution: the blur
             // upsamples it against the photo so its edges follow real object edges.
             let d = scene.extent, de = depth.extent
-            let r = cropRect(d, to: options.aspect)
+            let r = cropRect(d, to: options.aspect, shift: options.cropShift ?? 0)
             let kx = de.width / d.width, ky = de.height / d.height
             let small = CGRect(x: de.minX + (r.minX - d.minX) * kx, y: de.minY + (r.minY - d.minY) * ky,
                                width: r.width * kx, height: r.height * ky)
@@ -112,20 +112,35 @@ enum FilmPipeline {
         return CGRect(x: x0, y: y0, width: max(0, x1 - x0), height: max(0, y1 - y0))
     }
 
-    /// Centre-crop to the aspect ratio, matching the frame's own orientation.
-    static func crop(_ image: CIImage, to aspect: AspectRatio?) -> CIImage {
-        let rect = cropRect(image.extent, to: aspect)
+    /// Crop to the aspect ratio, matching the frame's own orientation, slid by `shift` along its free direction.
+    static func crop(_ image: CIImage, to aspect: AspectRatio?, shift: Double = 0) -> CIImage {
+        let rect = cropRect(image.extent, to: aspect, shift: shift)
         return image.cropped(to: rect).transformed(by: CGAffineTransform(translationX: -rect.minX, y: -rect.minY))
     }
 
-    /// The centred rectangle of `e` with the aspect ratio (in the frame's own orientation); `e` itself for nil.
-    static func cropRect(_ e: CGRect, to aspect: AspectRatio?) -> CGRect {
+    /// Which way a crop has room to slide, if any.
+    enum SlideAxis { case horizontal, vertical }
+
+    static func slideAxis(width: CGFloat, height: CGFloat, aspect: AspectRatio?) -> SlideAxis? {
+        guard let aspect, width > 0, height > 0 else { return nil }
+        let target = height > width ? 1 / aspect.longOverShort : aspect.longOverShort
+        let r = width / height
+        if abs(r - target) < 0.005 { return nil }
+        return r > target ? .horizontal : .vertical
+    }
+
+    /// The rectangle of `e` with the aspect ratio (in the frame's own orientation), centred and then slid by `shift`
+    /// (−1 … 1) across the spare room; `e` itself for nil.
+    static func cropRect(_ e: CGRect, to aspect: AspectRatio?, shift: Double = 0) -> CGRect {
         guard let aspect else { return e }
         let portrait = e.height > e.width
         let target = portrait ? 1 / aspect.longOverShort : aspect.longOverShort   // width / height
         var w = e.width, h = e.height
         if w / h > target { w = (h * target).rounded() } else { h = (w / target).rounded() }
-        return CGRect(x: e.midX - w / 2, y: e.midY - h / 2, width: w, height: h).integral
+        let t = CGFloat(min(1, max(-1, shift)))
+        let x = e.midX - w / 2 + t * (e.width - w) / 2
+        let y = e.midY - h / 2 + t * (e.height - h) / 2
+        return CGRect(x: x, y: y, width: w, height: h).integral.intersection(e.integral)
     }
 
     /// Additive blend that keeps the background's alpha.
