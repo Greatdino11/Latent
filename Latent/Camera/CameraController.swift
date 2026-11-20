@@ -51,6 +51,13 @@ final class CameraController: NSObject {
     @ObservationIgnored private var wantsRunning = true
     @ObservationIgnored private var wantsPortrait = false
     @ObservationIgnored private var wantsHighResolution = false
+    /// The back camera as one virtual device (smooth lens switching, but its photos stop at 12MP).
+    @ObservationIgnored private var virtualDevice: AVCaptureDevice?
+    /// The plain main camera: the only way to get its full 48MP. Used at 1× when 48MP is on.
+    @ObservationIgnored private var mainCamera: AVCaptureDevice?
+    @ObservationIgnored private var baseZoom: CGFloat = 1
+    @ObservationIgnored private var lensZoom: CGFloat = 1
+    @ObservationIgnored private var exposureBias: Float = 0
 
     private struct Setup { var ok: Bool; var lenses: [LensOption]; var selected: Int; var flash: Bool; var depth = false }
 
@@ -164,11 +171,61 @@ final class CameraController: NSObject {
         }
     }
 
+    /// The virtual back camera never delivers more than 12MP, so 48MP at 1× needs the main camera on its own.
+    /// Puts the right one in the session for the current lens and setting. Returns whether it switched
+    /// (camera queue).
+    @discardableResult
+    private func routeForResolution() -> Bool {
+        guard configured, !wantsPortrait, let virtual = virtualDevice, let main = mainCamera, let current = device else { return false }
+        let wantMain = wantsHighResolution && abs(lensZoom - baseZoom) < 0.01
+            && main.formats.contains { $0.supportedMaxPhotoDimensions.contains { Int($0.width) * Int($0.height) > 40_000_000 } }
+        let target = wantMain ? main : virtual
+        guard target.uniqueID != current.uniqueID, let newInput = try? AVCaptureDeviceInput(device: target) else { return false }
+        session.beginConfiguration()
+        if let input { session.removeInput(input) }
+        guard session.canAddInput(newInput) else {
+            if let input { session.addInput(input) }
+            session.commitConfiguration(); return false
+        }
+        session.addInput(newInput)
+        input = newInput
+        device = target
+        if wantMain { Self.useHighResolutionFormat(target) } else if session.canSetSessionPreset(.photo) { session.sessionPreset = .photo }
+        photoOutput.isAppleProRAWEnabled = photoOutput.isAppleProRAWSupported
+        pickPhotoDimensions(target)
+        if let conn = photoOutput.connection(with: .video), conn.isVideoMirroringSupported {
+            conn.automaticallyAdjustsVideoMirroring = false; conn.isVideoMirrored = false
+        }
+        session.commitConfiguration()
+        rotation = AVCaptureDevice.RotationCoordinator(device: target, previewLayer: nil)
+        apply(zoom: wantMain ? 1 : lensZoom)
+        if (try? target.lockForConfiguration()) != nil {
+            target.setExposureTargetBias(min(max(exposureBias, target.minExposureTargetBias), target.maxExposureTargetBias))
+            target.unlockForConfiguration()
+        }
+        Task { @MainActor in self.aeafLocked = false }
+        return true
+    }
+
+    /// The .photo preset usually already allows 48MP; if not, pick the 4:3 format that does.
+    private static func useHighResolutionFormat(_ dev: AVCaptureDevice) {
+        let area: (CMVideoDimensions) -> Int = { Int($0.width) * Int($0.height) }
+        if (dev.activeFormat.supportedMaxPhotoDimensions.map(area).max() ?? 0) > 40_000_000 { return }
+        let fourThree: (AVCaptureDevice.Format) -> Bool = {
+            let d = $0.formatDescription.dimensions
+            return abs(Double(d.width) / Double(max(d.height, 1)) - 4.0 / 3.0) < 0.02
+        }
+        let best = dev.formats.filter { f in fourThree(f) && (f.supportedMaxPhotoDimensions.map(area).max() ?? 0) > 40_000_000 }
+            .min { area($0.formatDescription.dimensions) < area($1.formatDescription.dimensions) }
+        if let best, (try? dev.lockForConfiguration()) != nil { dev.activeFormat = best; dev.unlockForConfiguration() }
+    }
+
     /// Switches between 12MP and 48MP capture.
     func setHighResolution(_ on: Bool) {
         queue.async {
             self.wantsHighResolution = on
             guard self.configured, let dev = self.device else { return }
+            if self.routeForResolution() { return }
             self.session.beginConfiguration()
             self.pickPhotoDimensions(dev)
             self.session.commitConfiguration()
@@ -257,10 +314,14 @@ final class CameraController: NSObject {
                 lenses.append(LensOption(id: lenses.count, label: "2", zoomFactor: base * 2))
             }
             selected = lenses.firstIndex { $0.zoomFactor == base } ?? 0
+            baseZoom = base; lensZoom = base
             apply(zoom: base)
         }
+        virtualDevice = position == .back && !dev.constituentDevices.isEmpty ? dev : nil
+        mainCamera = position == .back ? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) : nil
 
         configured = true
+        routeForResolution()
         if wantsPortrait { _ = applyPortrait(true) }
         if wantsRunning, !session.isRunning { session.startRunning() }
         return Setup(ok: true, lenses: lenses, selected: selected, flash: dev.hasFlash,
@@ -284,11 +345,15 @@ final class CameraController: NSObject {
     @MainActor
     func select(lens: LensOption) {
         selectedLens = lens.id
-        queue.async { self.apply(zoom: lens.zoomFactor) }
+        queue.async {
+            self.lensZoom = lens.zoomFactor
+            if !self.routeForResolution() { self.apply(zoom: lens.zoomFactor) }
+        }
     }
 
     func setExposureBias(_ ev: Float) {
         queue.async {
+            self.exposureBias = ev
             guard let d = self.device, (try? d.lockForConfiguration()) != nil else { return }
             d.setExposureTargetBias(min(max(ev, d.minExposureTargetBias), d.maxExposureTargetBias))
             d.unlockForConfiguration()
