@@ -14,6 +14,8 @@ final class AppModel {
     let level = LevelMonitor()
     let location = LocationProvider()
     let orientation = DeviceOrientation()
+    /// Mirrors deletions made in the Photos app back onto the roll.
+    @ObservationIgnored private(set) lazy var photosSync = PhotosSync(roll: roll)
 
     var exposure: Double = 0 {
         didSet { if !camera.isSimulated { camera.setExposureBias(Float(exposure)) } }
@@ -53,13 +55,19 @@ final class AppModel {
 
     /// The roll or settings is covering the viewfinder: the sensor and sensors-for-UI can rest.
     var viewfinderCovered = false { didSet { updateSensors() } }
-    var isActive = true { didSet { updateSensors() } }
+    var isActive = true {
+        didSet {
+            updateSensors()
+            if isActive && !oldValue { photosSync.refresh() }   // catch deletions made while we were away
+        }
+    }
 
     func launch() async {
         FilmAdvanceSound.configureSession()   // never interrupt music or podcasts
         camera.setHighResolution(prefs.highResolution)
         await camera.start()
         updateSensors()
+        photosSync.refresh()
         orientation.start()
         // Build the look tables in the background so the first frame on each stock develops quickly.
         let stocks = prefs.visibleStocks
@@ -251,15 +259,22 @@ final class AppModel {
     }
 
     /// Double exposure of two roll frames, printed as a new frame on the first one's stock and settings.
-    func doubleExposure(_ a: RollItem, _ b: RollItem) async throws -> RollItem {
-        let na = try Data(contentsOf: a.negativeURL), nb = try Data(contentsOf: b.negativeURL)
-        let ra = roll.recipe(for: a), rb = roll.recipe(for: b)
-        let stock = a.stock ?? .clear
-        var options = ra
+    /// The print settings for a double exposure: the base frame's, freshly dated, with today's texture.
+    func doubleExposureOptions(base: RollItem) -> DevelopOptions {
+        var options = roll.recipe(for: base)
         options.date = Date()
         options.cropShift = nil; options.portraitLens = nil; options.pushPull = nil
         options.grainAmount = prefs.grainAmount; options.halation = prefs.halation; options.flareAmount = prefs.flareAmount
-        let result = try await Darkroom.shared.doubleExposure(na, ra, nb, rb, stock: stock, options: options,
+        return options
+    }
+
+    /// `a` is the base (its frame, stock and settings); `balance` 0…1 is how much of the light comes from `b`.
+    func doubleExposure(_ a: RollItem, _ b: RollItem, balance: Double = 0.5) async throws -> RollItem {
+        let na = try Data(contentsOf: a.negativeURL), nb = try Data(contentsOf: b.negativeURL)
+        let ra = roll.recipe(for: a), rb = roll.recipe(for: b)
+        let stock = a.stock ?? .clear
+        let options = doubleExposureOptions(base: a)
+        let result = try await Darkroom.shared.doubleExposure(na, ra, nb, rb, balance: balance, stock: stock, options: options,
                                                              metadata: JPEGEncoder.metadata(of: a.url))
         let item = try roll.add(result, stock: stock)
         lastDeveloped = item

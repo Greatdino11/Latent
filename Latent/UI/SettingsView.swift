@@ -41,7 +41,7 @@ struct SettingsView: View {
                     Toggle("Save to Photos", isOn: $prefs.saveToPhotos)
                     Toggle("Keep the original underneath", isOn: $prefs.saveOriginal).disabled(!prefs.saveToPhotos)
                 } header: { Text("Library") } footer: {
-                    Text("Each frame is one photo in your library: a standard-range (SDR) print that looks the same on every screen. Re-developing it on the roll updates that photo. \"Keep the original underneath\" also stores the RAW (about 25 MB) so Edit ▸ Revert in Photos brings it back — but Photos shows that RAW in HDR, and apps like Lightroom may import it instead of your print. Leave it off for SDR-only photos.")
+                    Text("Each frame is one photo in your library: a standard-range (SDR) print that looks the same on every screen. Re-developing it on the roll updates that photo, and deleting it in Photos removes it from the roll too (it comes back if you restore it from Recently Deleted within 30 days; needs Full Access to Photos). \"Keep the original underneath\" also stores the RAW (about 25 MB) so Edit ▸ Revert in Photos brings it back — but Photos shows that RAW in HDR, and apps like Lightroom may import it instead of your print. Leave it off for SDR-only photos.")
                 }
                 Section {
                     LabeledContent("Prints", value: bytes(usage.prints))

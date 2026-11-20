@@ -102,18 +102,18 @@ actor Darkroom {
 
     /// Two negatives on one frame, like winding the film back: each at half exposure, added in scene light, the
     /// second scaled to fill the first. Printed as a new frame on `stock`, with its own negative.
-    func doubleExposure(_ a: Data, _ ra: DevelopOptions, _ b: Data, _ rb: DevelopOptions,
+    func doubleExposure(_ a: Data, _ ra: DevelopOptions, _ b: Data, _ rb: DevelopOptions, balance: Double = 0.5,
                         stock: FilmStock, options: DevelopOptions, metadata: [String: Any]) throws -> DevelopResult {
         guard let sa = CIImage(data: a), let sb = CIImage(data: b) else { throw DarkroomError.decode }
         let combined = Self.superimpose(NegativeCodec.decode(sa, format: ra.negativeFormat),
-                                        NegativeCodec.decode(sb, format: rb.negativeFormat))
+                                        NegativeCodec.decode(sb, format: rb.negativeFormat), balance: balance)
         let frame = CapturedFrame(source: .image(combined, sceneReferred: ra.sceneReferred), metadata: metadata)
         return try develop(frame, stock: stock, options: options)
     }
 
     /// Two scene-linear exposures on one frame, each given half the light (−1 EV) so the sum is exposed like a
     /// single shot. The second is scaled to fill the first frame and centred.
-    static func superimpose(_ first: CIImage, _ second: CIImage) -> CIImage {
+    static func superimpose(_ first: CIImage, _ second: CIImage, balance: Double = 0.5) -> CIImage {
         let e = first.extent, f = second.extent
         let k = max(e.width / f.width, e.height / f.height)
         let fitted = second
@@ -121,8 +121,13 @@ actor Darkroom {
             .transformed(by: CGAffineTransform(scaleX: k, y: k))
             .transformed(by: CGAffineTransform(translationX: e.midX, y: e.midY))
             .cropped(to: e)
-        let half: (CIImage) -> CIImage = { $0.applyingFilter("CIExposureAdjust", parameters: [kCIInputEVKey: -1]) }
-        return FilmPipeline.add(half(fitted), onto: half(first)).cropped(to: e)
+        let b = CGFloat(min(1, max(0, balance)))
+        let weigh: (CIImage, CGFloat) -> CIImage = { image, w in
+            image.applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": CIVector(x: w, y: 0, z: 0, w: 0), "inputGVector": CIVector(x: 0, y: w, z: 0, w: 0),
+                "inputBVector": CIVector(x: 0, y: 0, z: w, w: 0), "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1)])
+        }
+        return FilmPipeline.add(weigh(fitted, b), onto: weigh(first, 1 - b)).cropped(to: e)
     }
 
     /// The frame as it came out of the camera: same crop and exposure, but a plain neutral print with none of the
@@ -160,6 +165,21 @@ actor Darkroom {
         } else {
             source = SimulatedScene.capture; options.sceneReferred = false; options.negativeFormat = nil
         }
+        return try previewPrint(source, options: options, stock: stock, maxPixel: maxPixel)
+    }
+
+    /// A small print of a double exposure, for choosing the order and balance before exposing it for real.
+    func doubleExposurePreview(_ a: Data, _ ra: DevelopOptions, _ b: Data, _ rb: DevelopOptions, balance: Double,
+                               stock: FilmStock, options: DevelopOptions, maxPixel: CGFloat = 1000) throws -> CGImage {
+        guard let sa = CIImage(data: a), let sb = CIImage(data: b) else { throw DarkroomError.decode }
+        let combined = Self.superimpose(NegativeCodec.decode(sa, format: ra.negativeFormat),
+                                        NegativeCodec.decode(sb, format: rb.negativeFormat), balance: balance)
+        var o = options; o.sceneReferred = ra.sceneReferred; o.negativeFormat = nil
+        return try previewPrint(combined, options: o, stock: stock, maxPixel: maxPixel)
+    }
+
+    private func previewPrint(_ source: CIImage, options: DevelopOptions, stock: FilmStock, maxPixel: CGFloat) throws -> CGImage {
+        var options = options
         let long = max(source.extent.width, source.extent.height)
         let small = try materialize(source.applyingFilter("CILanczosScaleTransform", parameters: [kCIInputScaleKey: min(1, maxPixel / long)]))
         options.dateStamp = false; options.frame = .none; options.dust = nil

@@ -33,8 +33,8 @@ final class RollStore {
     @ObservationIgnored private let folder: URL
     @ObservationIgnored private let thumbs = NSCache<NSString, UIImage>()
 
-    init() {
-        folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Roll", isDirectory: true)
+    init(folder custom: URL? = nil) {
+        folder = custom ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Roll", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         reload()
     }
@@ -102,6 +102,70 @@ final class RollStore {
     func setPhotosID(_ id: String?, for item: RollItem) {
         if let id { try? id.write(to: item.photosURL, atomically: true, encoding: .utf8) }
         else { try? FileManager.default.removeItem(at: item.photosURL) }
+    }
+
+    // MARK: trash (frames whose Photos copy was deleted)
+
+    /// Frames removed because their Photos copy was deleted wait here 30 days, like Photos' Recently Deleted,
+    /// and come back if the photo is restored there.
+    @ObservationIgnored private lazy var trashFolder: URL = {
+        let url = folder.deletingLastPathComponent().appendingPathComponent("RollTrash", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }()
+
+    private func files(of base: String, in dir: URL) -> [URL] {
+        ((try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.lastPathComponent.hasPrefix(base + "_") || $0.lastPathComponent.hasPrefix(base + ".") }
+    }
+
+    /// Moves a frame (print, negative, recipe, depth, Photos link) into the trash.
+    func trash(_ item: RollItem) {
+        let fm = FileManager.default
+        for f in files(of: item.base, in: folder) {
+            let dest = trashFolder.appendingPathComponent(f.lastPathComponent)
+            try? fm.removeItem(at: dest)
+            try? fm.moveItem(at: f, to: dest)
+        }
+        try? ISO8601DateFormatter().string(from: Date())
+            .write(to: trashFolder.appendingPathComponent("\(item.base).trashed"), atomically: true, encoding: .utf8)
+        purgeThumbs(item)
+        items.removeAll { $0.id == item.id }
+    }
+
+    /// Trashed frames and the Photos asset each was linked to.
+    func trashedPhotoLinks() -> [(base: String, photosID: String)] {
+        ((try? FileManager.default.contentsOfDirectory(at: trashFolder, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension == "photos" }
+            .compactMap { url in
+                guard let id = try? String(contentsOf: url, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+                      !id.isEmpty else { return nil }
+                return (url.deletingPathExtension().lastPathComponent, id)
+            }
+    }
+
+    /// Puts a trashed frame back on the roll.
+    func restore(base: String) {
+        let fm = FileManager.default
+        for f in files(of: base, in: trashFolder) where f.pathExtension != "trashed" {
+            try? fm.moveItem(at: f, to: folder.appendingPathComponent(f.lastPathComponent))
+        }
+        try? fm.removeItem(at: trashFolder.appendingPathComponent("\(base).trashed"))
+        reload()
+    }
+
+    /// Deletes frames that have been in the trash longer than `days`.
+    func purgeTrash(olderThan days: Double = 30) {
+        let fm = FileManager.default
+        let cutoff = Date().addingTimeInterval(-days * 86_400)
+        let markers = ((try? fm.contentsOfDirectory(at: trashFolder, includingPropertiesForKeys: nil)) ?? []).filter { $0.pathExtension == "trashed" }
+        for m in markers {
+            guard let text = try? String(contentsOf: m, encoding: .utf8),
+                  let when = ISO8601DateFormatter().date(from: text.trimmingCharacters(in: .whitespacesAndNewlines)),
+                  when < cutoff else { continue }
+            let base = m.deletingPathExtension().lastPathComponent
+            for f in files(of: base, in: trashFolder) { try? fm.removeItem(at: f) }
+        }
     }
 
     // MARK: storage

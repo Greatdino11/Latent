@@ -25,6 +25,10 @@ struct RollView: View {
             }
         }
         .statusBarHidden()
+        .onChange(of: model.roll.items) { _, items in
+            // The frame on screen left the roll (e.g. its photo was deleted in Photos): back to the grid.
+            if let id = selected, !items.contains(where: { $0.id == id }) { withAnimation { selected = nil } }
+        }
         .onAppear {
             guard !didOpen else { return }
             didOpen = true
@@ -86,6 +90,7 @@ private struct RollGrid: View {
     @State private var busy = false
     @State private var confirmDelete = false
     @State private var sheetURL: URL?
+    @State private var doublePair: [RollItem]?
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 2), count: 3)
     private var chosenItems: [RollItem] { model.roll.items.filter { chosen.contains($0.id) } }
@@ -171,6 +176,7 @@ private struct RollGrid: View {
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-selectTwo") {
                 selecting = true; chosen = Set(model.roll.items.prefix(2).map(\.id))
+                if ProcessInfo.processInfo.arguments.contains("-openDouble") { makeDoubleExposure() }
             }
             #endif
         }
@@ -181,6 +187,14 @@ private struct RollGrid: View {
         }
         .sheet(isPresented: Binding(get: { sheetURL != nil }, set: { if !$0 { sheetURL = nil } })) {
             if let url = sheetURL { ContactSheetView(url: url) }
+        }
+        .sheet(isPresented: Binding(get: { doublePair != nil }, set: { if !$0 { doublePair = nil } })) {
+            if let pair = doublePair {
+                DoubleExposureView(base: pair[0], top: pair[1]) { item in
+                    doublePair = nil; selecting = false; chosen = []
+                    open(item.id)
+                }
+            }
         }
         .confirmationDialog("Delete \(chosen.count) frames and their negatives?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
@@ -253,19 +267,10 @@ private struct RollGrid: View {
     }
 
     private func makeDoubleExposure() {
-        // The earlier-taken frame is the base exposure.
+        // Starts with the earlier-taken frame as the base; the sheet can swap them.
         let pair = chosenItems.sorted { $0.date < $1.date }
         guard pair.count == 2 else { return }
-        busy = true
-        status = "Exposing twice…"
-        Task {
-            do {
-                let item = try await model.doubleExposure(pair[0], pair[1])
-                status = nil; selecting = false; chosen = []
-                open(item.id)
-            } catch { status = error.localizedDescription }
-            busy = false
-        }
+        doublePair = pair
     }
 
     /// Runs an action over the selected frames one at a time, with progress.
@@ -752,6 +757,131 @@ private struct PagerImage: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: item) {
             if let fresh = await model.roll.thumbnail(for: item, maxPixel: 2400) { image = fresh }
+        }
+    }
+}
+
+/// Sets up a double exposure: which frame is the base (it gives the frame, stock and settings) and which goes on
+/// top, and how the light is shared between them, with a live preview.
+private struct DoubleExposureView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @State var base: RollItem
+    @State var top: RollItem
+    var done: (RollItem) -> Void
+
+    @State private var balance = 0.5
+    @State private var preview: UIImage?
+    @State private var rendering = false
+    @State private var exposing = false
+    @State private var error: String?
+    @State private var thumbs: [String: UIImage] = [:]
+
+    var body: some View {
+        VStack(spacing: 14) {
+            HStack {
+                Text("DOUBLE EXPOSURE").font(Theme.mono(14, .bold)).foregroundStyle(Theme.amber)
+                Spacer()
+                Button("CANCEL") { dismiss() }.font(Theme.mono(11, .bold)).foregroundStyle(Theme.label)
+            }
+            .padding(.horizontal, 20).padding(.top, 18)
+
+            ZStack {
+                Color.black
+                if let preview { Image(uiImage: preview).resizable().scaledToFit() }
+                if rendering || preview == nil { ProgressView().tint(Theme.amber) }
+            }
+            .frame(maxHeight: .infinity)
+
+            HStack(spacing: 10) {
+                card(base, role: "BASE", note: "sets frame & stock")
+                Button {
+                    Feedback.selection()
+                    (base, top) = (top, base)
+                    balance = 1 - balance
+                } label: {
+                    Image(systemName: "arrow.left.arrow.right")
+                        .font(.system(size: 16, weight: .bold)).foregroundStyle(.black)
+                        .frame(width: 44, height: 44).background(Circle().fill(Theme.amber))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Swap base and top")
+                card(top, role: "ON TOP", note: "laid over it")
+            }
+            .padding(.horizontal, 20)
+
+            VStack(spacing: 4) {
+                HStack {
+                    Text("BASE \(Int(((1 - balance) * 100).rounded()))%")
+                    Spacer()
+                    Text("ON TOP \(Int((balance * 100).rounded()))%")
+                }
+                .font(Theme.mono(10, .bold)).foregroundStyle(Theme.dim)
+                Slider(value: $balance, in: 0.15...0.85, step: 0.05)
+            }
+            .padding(.horizontal, 20)
+
+            if let error { Text(error).font(.footnote).foregroundStyle(.red).padding(.horizontal, 20) }
+
+            Button(action: expose) {
+                HStack(spacing: 8) {
+                    if exposing { ProgressView().tint(.black) }
+                    Text(exposing ? "EXPOSING…" : "EXPOSE").font(Theme.mono(15, .bold))
+                }
+                .foregroundStyle(.black)
+                .frame(maxWidth: .infinity).frame(height: 54)
+                .background(Theme.amber, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(exposing)
+            .padding(.horizontal, 22).padding(.bottom, 8)
+        }
+        .background(Theme.body.ignoresSafeArea())
+        .interactiveDismissDisabled(exposing)
+        .task(id: "\(base.id)|\(top.id)|\(balance)") { await render() }
+        .task {
+            for item in [base, top] { thumbs[item.id] = await model.roll.thumbnail(for: item, maxPixel: 200) }
+        }
+    }
+
+    private func card(_ item: RollItem, role: String, note: String) -> some View {
+        HStack(spacing: 10) {
+            Group {
+                if let t = thumbs[item.id] { Image(uiImage: t).resizable().scaledToFill() } else { Theme.panel }
+            }
+            .frame(width: 46, height: 46).clipShape(RoundedRectangle(cornerRadius: 6))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(role).font(Theme.mono(11, .bold)).foregroundStyle(Theme.amber)
+                Text(note).font(.caption2).foregroundStyle(Theme.dim).lineLimit(2)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Theme.panel))
+    }
+
+    private func render() async {
+        try? await Task.sleep(for: .milliseconds(preview == nil ? 0 : 150))   // settle while sliding
+        guard !Task.isCancelled,
+              let na = try? Data(contentsOf: base.negativeURL), let nb = try? Data(contentsOf: top.negativeURL) else { return }
+        rendering = true
+        defer { rendering = false }
+        let (ra, rb) = (model.roll.recipe(for: base), model.roll.recipe(for: top))
+        let options = model.doubleExposureOptions(base: base)
+        if let cg = try? await Darkroom.shared.doubleExposurePreview(na, ra, nb, rb, balance: balance,
+                                                                       stock: base.stock ?? .clear, options: options),
+           !Task.isCancelled {
+            preview = UIImage(cgImage: cg)
+        }
+    }
+
+    private func expose() {
+        exposing = true; error = nil
+        Task {
+            do { done(try await model.doubleExposure(base, top, balance: balance)) }
+            catch { self.error = error.localizedDescription }
+            exposing = false
         }
     }
 }

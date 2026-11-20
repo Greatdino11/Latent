@@ -420,3 +420,55 @@ final class ContactFrameTests: XCTestCase {
         XCTAssertNil(none, "a 3:2 frame needs no mark")
     }
 }
+
+extension DoubleExposureTests {
+    /// Balance moves the light from the base to the frame on top.
+    func testBalanceSharesTheLight() {
+        let base = CIImage(color: CIColor(red: 0.5, green: 0.5, blue: 0.5, alpha: 1, colorSpace: CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!)!)
+            .cropped(to: CGRect(x: 0, y: 0, width: 100, height: 100))
+        let black = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 1, colorSpace: CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!)!)
+            .cropped(to: CGRect(x: 0, y: 0, width: 100, height: 100))
+        let ctx = CIContext(options: [.cacheIntermediates: false])
+        func v(_ i: CIImage) -> Float {
+            var px = [Float](repeating: 0, count: 4)
+            ctx.render(i, toBitmap: &px, rowBytes: 16, bounds: CGRect(x: 50, y: 50, width: 1, height: 1), format: .RGBAf,
+                       colorSpace: CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!)
+            return px[1]
+        }
+        XCTAssertEqual(v(Darkroom.superimpose(base, black, balance: 0.25)), 0.375, accuracy: 0.003)
+        XCTAssertEqual(v(Darkroom.superimpose(base, black, balance: 0.75)), 0.125, accuracy: 0.003)
+    }
+}
+
+final class RollTrashTests: XCTestCase {
+    func testTrashRestoreAndPurge() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let rollDir = root.appendingPathComponent("Roll")
+        try FileManager.default.createDirectory(at: rollDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let base = "1795000000000"
+        for name in ["\(base)_honey.jpg", "\(base).neg.heic", "\(base).recipe.json"] { try Data([1]).write(to: rollDir.appendingPathComponent(name)) }
+        try "ASSET-1".write(to: rollDir.appendingPathComponent("\(base).photos"), atomically: true, encoding: .utf8)
+
+        let roll = RollStore(folder: rollDir)
+        let item = try XCTUnwrap(roll.items.first)
+        roll.trash(item)
+        XCTAssertTrue(roll.items.isEmpty)
+        XCTAssertTrue((try FileManager.default.contentsOfDirectory(atPath: rollDir.path)).isEmpty, "every file moves out")
+        XCTAssertEqual(roll.trashedPhotoLinks().first?.photosID, "ASSET-1")
+
+        roll.restore(base: base)
+        XCTAssertEqual(roll.items.map(\.base), [base])
+        XCTAssertTrue(roll.items[0].hasNegative)
+        XCTAssertTrue(roll.trashedPhotoLinks().isEmpty)
+
+        roll.trash(roll.items[0])
+        roll.purgeTrash(olderThan: 30)
+        XCTAssertEqual(roll.trashedPhotoLinks().count, 1, "recent trash is kept")
+        let marker = root.appendingPathComponent("RollTrash/\(base).trashed")
+        try ISO8601DateFormatter().string(from: Date().addingTimeInterval(-40 * 86_400)).write(to: marker, atomically: true, encoding: .utf8)
+        roll.purgeTrash(olderThan: 30)
+        XCTAssertTrue(roll.trashedPhotoLinks().isEmpty)
+        XCTAssertTrue((try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("RollTrash").path)).isEmpty)
+    }
+}
