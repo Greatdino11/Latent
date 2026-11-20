@@ -54,6 +54,7 @@ final class AppModel {
     var isActive = true { didSet { updateSensors() } }
 
     func launch() async {
+        FilmAdvanceSound.configureSession()   // never interrupt music or podcasts
         await camera.start()
         updateSensors()
         orientation.start()

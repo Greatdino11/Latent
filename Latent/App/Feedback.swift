@@ -34,9 +34,18 @@ enum Feedback {
 /// A synthesised mechanical wind-on: a lever clack followed by a ratchet. Generated once, no audio files.
 final class FilmAdvanceSound {
     static let shared = FilmAdvanceSound()
-    private let engine = AVAudioEngine()
+    // Built lazily, after the audio session is set to mix: touching an engine's output first makes iOS treat the
+    // app as the main audio (solo ambient), which pauses music that's playing.
+    private var engine: AVAudioEngine?
     private let player = AVAudioPlayerNode()
     private var buffer: AVAudioPCMBuffer?
+    private var format: AVAudioFormat?
+    private var stopWork: DispatchWorkItem?
+
+    /// Camera sounds play over other audio, never interrupting it, and respect the silent switch.
+    static func configureSession() {
+        try? AVAudioSession.sharedInstance().setCategory(.ambient, mode: .default, options: [.mixWithOthers])
+    }
 
     private init() {
         let rate = 44_100.0
@@ -62,17 +71,26 @@ final class FilmAdvanceSound {
         for k in 0..<7 { click(at: 0.16 + Double(k) * 0.032, gain: 0.22, decay: 0.003, tone: 3200) }   // ratchet
         click(at: 0.39, gain: 0.35, decay: 0.005, tone: 1400)     // lever returns
         buffer = buf
-
-        engine.attach(player)
-        engine.connect(player, to: engine.mainMixerNode, format: format)
+        self.format = format
     }
 
     func play() {
-        guard let buffer else { return }
-        // Ambient: respects the silent switch and mixes with other audio.
-        try? AVAudioSession.sharedInstance().setCategory(.ambient, options: [.mixWithOthers])
+        guard let buffer, let format else { return }
+        Self.configureSession()
+        let engine = self.engine ?? {
+            let e = AVAudioEngine()
+            e.attach(player)
+            e.connect(player, to: e.mainMixerNode, format: format)
+            self.engine = e
+            return e
+        }()
         if !engine.isRunning { try? engine.start() }
         player.scheduleBuffer(buffer, at: nil, options: [.interrupts])
         player.play()
+        // Let the audio hardware go once the sound has played.
+        stopWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.player.stop(); self?.engine?.stop() }
+        stopWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
     }
 }

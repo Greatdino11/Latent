@@ -196,6 +196,7 @@ final class CameraController: NSObject {
               let newInput = try? AVCaptureDeviceInput(device: dev) else { return failed }
 
         session.beginConfiguration()
+        session.automaticallyConfiguresApplicationAudioSession = false   // photos only: leave other audio alone
         session.sessionPreset = .photo
         if let input { session.removeInput(input) }
         guard session.canAddInput(newInput) else {
