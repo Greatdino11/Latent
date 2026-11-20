@@ -6,6 +6,7 @@ struct CameraScreen: View {
     @State private var showSettings = false
     @State private var showRoll = false
     @State private var showEditor = false   // debug: -openEditor
+    @State private var showLook = false
 
     var body: some View {
         @Bindable var model = model
@@ -14,8 +15,9 @@ struct CameraScreen: View {
                 .padding(.horizontal, 18)
                 .frame(height: 44)
             Viewfinder()
+                .overlay(alignment: .bottom) { ActiveLookBar { showLook = true }.padding(.bottom, 10) }
                 .layoutPriority(1)
-            StockStrip()
+            StockStrip(openLook: { showLook = true })
                 .padding(.top, 12)
             ExposureDial(value: $model.exposure)
                 .frame(height: 46)
@@ -28,7 +30,7 @@ struct CameraScreen: View {
         .background(Theme.body.ignoresSafeArea())
         .background {
             // Volume buttons fire the shutter while the viewfinder is showing.
-            HardwareShutter(enabled: !showRoll && !showSettings && model.reveal == nil) { model.capture() }
+            HardwareShutter(enabled: !showRoll && !showSettings && !showLook && model.reveal == nil) { model.capture() }
         }
         .overlay(alignment: .top) {
             if let notice = model.notice {
@@ -52,6 +54,7 @@ struct CameraScreen: View {
         .persistentSystemOverlays(.hidden)
         .statusBarHidden()
         .sheet(isPresented: $showSettings) { SettingsView() }
+        .sheet(isPresented: $showLook) { LookDrawer() }
         .sheet(isPresented: $showEditor) {
             NavigationStack { StockEditorView(custom: CustomStock.random(keeping: "custom-preview", name: "Test"), isNew: true) }
         }
@@ -68,6 +71,7 @@ struct CameraScreen: View {
             await model.developDemoRollIfRequested()
             if ProcessInfo.processInfo.arguments.contains("-openRoll") { showRoll = true }
             if ProcessInfo.processInfo.arguments.contains("-openEditor") { showEditor = true }
+            if ProcessInfo.processInfo.arguments.contains("-openLook") { showLook = true }
             #endif
         }
         .onChange(of: scenePhase) { _, phase in model.isActive = phase == .active }

@@ -28,7 +28,7 @@ struct RollView: View {
         .onAppear {
             guard !didOpen else { return }
             didOpen = true
-            if openLatest { selected = model.roll.items.first?.id }
+            if openLatest, !ProcessInfo.processInfo.arguments.contains("-selectTwo") { selected = model.roll.items.first?.id }
         }
     }
 }
@@ -133,6 +133,8 @@ private struct RollGrid: View {
                 }
             }
 
+            if selecting { actionBar }
+
             if let line = status ?? model.importStatus {
                 HStack(spacing: 8) {
                     if busy || model.developingCount > 0 { ProgressView().tint(Theme.amber) }
@@ -155,12 +157,22 @@ private struct RollGrid: View {
                 exit()
             } trailing: {
                 if selecting {
-                    selectionMenu
+                    Button { confirmDelete = true } label: {
+                        RoundIcon(systemName: "trash", tint: chosen.isEmpty ? Theme.dim : .red)
+                    }
+                    .buttonStyle(.plain).disabled(chosen.isEmpty || busy).accessibilityLabel("Delete selected")
                 } else {
                     Button { selecting = true } label: { RoundIcon(systemName: "checkmark.circle") }
                         .buttonStyle(.plain).accessibilityLabel("Select frames")
                 }
             }
+        }
+        .onAppear {
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-selectTwo") {
+                selecting = true; chosen = Set(model.roll.items.prefix(2).map(\.id))
+            }
+            #endif
         }
         .onChange(of: picks) { _, new in
             guard !new.isEmpty else { return }
@@ -178,32 +190,54 @@ private struct RollGrid: View {
         } message: { Text("Copies already saved to Photos are kept.") }
     }
 
-    private var selectionMenu: some View {
-        Menu {
-            Button { run("Saving") { try await model.saveToPhotos($0) } } label: {
-                Label("Save to Photos", systemImage: "square.and.arrow.down")
-            }
-            ShareLink(items: chosenItems.map(\.url)) { Label("Share", systemImage: "square.and.arrow.up") }
-            ShareLink(items: chosenItems.filter(\.hasNegative).flatMap { [$0.negativeURL, $0.recipeURL] }) {
-                Label("Share negatives", systemImage: "film.stack")
-            }
-            Menu {
-                ForEach(model.prefs.orderedStocks) { stock in
-                    Button(stock.displayName) { run("Developing") { try await model.reprint($0, stock: stock) } }
+    /// What you can do with the selected frames, all in view.
+    private var actionBar: some View {
+        let none = chosen.isEmpty || busy
+        let pairReady = chosenItems.count == 2 && chosenItems.allSatisfy(\.hasNegative)
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                action("Save", "square.and.arrow.down", enabled: !none) { run("Saving") { try await model.saveToPhotos($0) } }
+                ShareLink(items: chosenItems.map(\.url)) { actionLabel("Share", "square.and.arrow.up", enabled: !none) }
+                    .disabled(none)
+                Menu {
+                    ForEach(model.prefs.orderedStocks) { stock in
+                        Button(stock.displayName) { run("Developing") { try await model.reprint($0, stock: stock) } }
+                    }
+                } label: { actionLabel("Develop as", "film", enabled: !none) }
+                    .disabled(none)
+                action("Contact sheet", "squares.below.rectangle", enabled: !none) { makeContactSheet() }
+                action("Double", "circle.circle", enabled: pairReady && !busy) { makeDoubleExposure() }
+                ShareLink(items: chosenItems.filter(\.hasNegative).flatMap { [$0.negativeURL, $0.recipeURL] }) {
+                    actionLabel("Negatives", "film.stack", enabled: !none)
                 }
-            } label: { Label("Re-develop as…", systemImage: "film") }
-            Button { makeContactSheet() } label: { Label("Contact sheet", systemImage: "squares.below.rectangle") }
-            if chosenItems.count == 2, chosenItems.allSatisfy(\.hasNegative) {
-                Button { makeDoubleExposure() } label: { Label("Double exposure", systemImage: "circle.circle") }
+                .disabled(none)
             }
-            Button { run("Reprinting") { try await model.reprint($0) } } label: {
-                Label("Reprint with current settings", systemImage: "arrow.clockwise")
-            }
-            Button(role: .destructive) { confirmDelete = true } label: { Label("Delete", systemImage: "trash") }
-        } label: {
-            RoundIcon(systemName: "ellipsis", tint: chosen.isEmpty ? Theme.dim : Theme.label)
+            .padding(.horizontal, 12)
         }
-        .disabled(chosen.isEmpty || busy)
+        .padding(.top, 8)
+        .overlay(alignment: .bottom) {
+            if chosenItems.count == 1 || chosenItems.count > 2 {
+                Text("Double exposure needs exactly two frames").font(Theme.mono(9)).foregroundStyle(Theme.dim)
+                    .offset(y: 14)
+            }
+        }
+        .padding(.bottom, 12)
+    }
+
+    private func action(_ title: String, _ icon: String, enabled: Bool, _ run: @escaping () -> Void) -> some View {
+        Button { Feedback.selection(); run() } label: { actionLabel(title, icon, enabled: enabled) }
+            .buttonStyle(.plain).disabled(!enabled)
+    }
+
+    private func actionLabel(_ title: String, _ icon: String, enabled: Bool) -> some View {
+        VStack(spacing: 6) {
+            Image(systemName: icon).font(.system(size: 18, weight: .medium))
+            Text(title.uppercased()).font(Theme.mono(9, .bold)).lineLimit(1).fixedSize()
+        }
+        .foregroundStyle(enabled ? Theme.label : Theme.dim.opacity(0.6))
+        .frame(minWidth: 64).frame(height: 58)
+        .padding(.horizontal, 4)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Theme.panel))
     }
 
     private func makeContactSheet() {
@@ -281,7 +315,7 @@ private struct RollCell: View {
 
 // MARK: - Pager
 
-private enum DevelopTool: String, CaseIterable { case film = "FILM", light = "LIGHT", lens = "LENS", frame = "FRAME" }
+private enum DevelopTool: String, CaseIterable { case film = "FILM", light = "LIGHT", texture = "TEXTURE", lens = "LENS", frame = "FRAME" }
 
 private struct PhotoPager: View {
     @Environment(AppModel.self) private var model
@@ -292,7 +326,8 @@ private struct PhotoPager: View {
     @State private var comparing = false
     @State private var original: UIImage?
     @State private var originalFor: String?
-    @State private var tool: DevelopTool = ProcessInfo.processInfo.arguments.contains("-frameTool") ? .frame : .film
+    @State private var tool: DevelopTool = ProcessInfo.processInfo.arguments.contains("-frameTool") ? .frame
+        : ProcessInfo.processInfo.arguments.contains("-textureTool") ? .texture : .film
     @State private var developing = false
     @State private var dirty = false
     @State private var status: String?
@@ -315,6 +350,9 @@ private struct PhotoPager: View {
     @State private var lens: PortraitLens?
     @State private var blur = 0.6
     @State private var focus = 0.8
+    @State private var grain = 1.0
+    @State private var halation = true
+    @State private var flare = 0.6
     @State private var loadedFor = ""
 
     private var item: RollItem? { model.roll.item(id: selection) }
@@ -380,7 +418,6 @@ private struct PhotoPager: View {
                             ShareLink(items: [item.negativeURL, item.recipeURL]) {
                                 Label("Share negative", systemImage: "film.stack")
                             }
-                            Button { apply() } label: { Label("Reprint with current settings", systemImage: "arrow.clockwise") }
                         }
                         Button(role: .destructive) { confirmDelete = true } label: { Label("Delete", systemImage: "trash") }
                     } label: { RoundIcon(systemName: "ellipsis") }
@@ -428,10 +465,11 @@ private struct PhotoPager: View {
     }
 
     private func caption(_ item: RollItem) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 14) {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(item.stock?.displayName.uppercased() ?? item.stockID.uppercased())
                 .font(Theme.mono(13, .bold)).foregroundStyle(Theme.amber)
-            Spacer()
+                .lineLimit(1).minimumScaleFactor(0.7)
+            Spacer(minLength: 8)
             if item.hasNegative {
                 ForEach(DevelopTool.allCases.filter { $0 != .lens || item.hasDepth }, id: \.self) { t in
                     Button(t.rawValue) { withAnimation(.snappy) { tool = t } }
@@ -452,6 +490,7 @@ private struct PhotoPager: View {
             switch tool {
             case .film: filmTool
             case .light: lightTool
+            case .texture: textureTool
             case .frame: frameTool
             case .lens: lensTool
             }
@@ -532,6 +571,19 @@ private struct PhotoPager: View {
         .disabled(false)
     }
 
+    /// Grain, glow and flare for this frame (new photos take theirs from the look drawer).
+    private var textureTool: some View {
+        VStack(spacing: 10) {
+            LookSlider(title: "GRAIN", value: $grain, range: 0...2, step: 0.25, label: LookLabels.grain) { apply() }
+            LookSlider(title: "FLARE", value: $flare, range: 0...1.5, step: 0.1, label: LookLabels.flare) { apply() }
+            HStack {
+                LookChip(title: halation ? "HALATION ✓" : "HALATION", on: halation) { halation.toggle(); apply() }
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 18)
+    }
+
     private var lightTool: some View {
         VStack(spacing: 4) {
             Text(push == 0 ? "DEVELOP NORMAL" : push > 0 ? "PUSH +\(String(format: "%.1f", push))" : "PULL \(String(format: "%.1f", push))")
@@ -591,17 +643,7 @@ private struct PhotoPager: View {
     }
 
     private func chip(_ title: String, on: Bool, action: @escaping () -> Void) -> some View {
-        Button {
-            Feedback.selection(); action()
-        } label: {
-            Text(title)
-                .font(Theme.mono(11, .bold))
-                .foregroundStyle(on ? Theme.amber : Theme.label)
-                .padding(.horizontal, 10).padding(.vertical, 8)
-                .background(RoundedRectangle(cornerRadius: 6).fill(Theme.panel))
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(on ? Theme.amber : .clear, lineWidth: 1.2))
-        }
-        .buttonStyle(.plain)
+        LookChip(title: title, on: on, action: action)
     }
 
     // MARK: actions
@@ -630,6 +672,9 @@ private struct PhotoPager: View {
         lens = r.portraitLens
         blur = r.blurAmount ?? model.prefs.blurAmount
         focus = r.focusDepth ?? 0.8
+        grain = r.grainAmount
+        halation = r.halation
+        flare = r.flareStrength
         if tool == .lens, !item.hasDepth { tool = .film }
         loadedFor = item.id
     }
@@ -646,6 +691,7 @@ private struct PhotoPager: View {
         let cs = cropShift
         let (lk, du) = (leak, dust)
         let (ln, bl, fc) = (lens, blur, focus)
+        let (gr, ha, fl) = (grain, halation, flare)
         Task {
             do {
                 status = try await model.reprint(item, stock: stock) { o in
@@ -653,6 +699,7 @@ private struct PhotoPager: View {
                     o.cropShift = cs == 0 ? nil : cs
                     o.lightLeak = lk > 0 ? lk : nil; o.dust = du ? true : nil
                     o.portraitLens = ln; o.blurAmount = bl; o.focusDepth = fc
+                    o.grainAmount = gr; o.halation = ha; o.flareAmount = fl
                 }
             } catch {
                 status = error.localizedDescription

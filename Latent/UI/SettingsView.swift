@@ -13,68 +13,22 @@ struct SettingsView: View {
         @Bindable var prefs = model.prefs
         NavigationStack {
             Form {
-                Section("Film") {
+                Section {
                     NavigationLink("Stocks & random pool") { StockManagerView() }
-                }
-                Section {
-                    VStack(alignment: .leading) {
-                        HStack {
-                            Text("Grain")
-                            Spacer()
-                            Text(grainLabel(prefs.grainAmount)).foregroundStyle(.secondary)
-                        }
-                        Slider(value: $prefs.grainAmount, in: 0...2, step: 0.25)
-                    }
-                    Toggle("Halation", isOn: $prefs.halation)
-                    VStack(alignment: .leading) {
-                        HStack {
-                            Text("Lens flare")
-                            Spacer()
-                            Text(flareLabel(prefs.flareAmount)).foregroundStyle(.secondary)
-                        }
-                        Slider(value: $prefs.flareAmount, in: 0...1.5, step: 0.1)
-                    }
-                } header: { Text("Texture") } footer: {
-                    Text("Halation is the warm glow film gets around bright lights. Lens flare adds ghosts when the sun or a lamp is in frame. To apply new texture settings to an earlier frame, open it and choose Reprint from •••.")
-                }
-                Section {
-                    Toggle("Date stamp", isOn: $prefs.dateStamp)
-                    Picker("Print frame", selection: $prefs.frameStyle) {
-                        ForEach(FrameStyle.allCases) { Text($0.label).tag($0) }
-                    }
-                    Picker("Light leaks", selection: $prefs.lightLeak) {
-                        Text("Off").tag(0.0); Text("Subtle").tag(0.5); Text("Strong").tag(1.0)
-                    }
-                    Toggle("Dust & scratches", isOn: $prefs.dust)
-                } header: { Text("Finishing") } footer: {
-                    Text("35mm adds a film-scan border with sprocket holes and edge numbers. Leaks and dust are placed differently on every frame, and can be changed per photo in the roll (FRAME).")
-                }
-                Section {
-                    Picker("Lens", selection: $prefs.portraitLens) {
-                        ForEach(PortraitLens.allCases) { Text($0.label).tag($0) }
-                    }
-                    VStack(alignment: .leading) {
-                        Text("Background blur")
-                        Slider(value: $prefs.blurAmount, in: 0.1...1)
-                    }
-                } header: { Text("Portrait") } footer: {
-                    Text("Turn on Portrait with the person icon on the camera. It captures depth (instead of ProRAW) so the background can be blurred: Classic is smooth, Bubble gives bright-rimmed bokeh, Swirl spins the background like a vintage lens. Change the lens, blur and focus later in the roll (LENS).")
+                } header: { Text("Film") } footer: {
+                    Text("Grain, flare, halation, leaks, dust, borders, the portrait lens and 48MP are on the camera: tap LOOK on the viewfinder (or swipe up on the stocks). Long-press a stock for its options; + at the end of the stocks makes a new one or adds one from a code.")
                 }
                 Section {
                     Picker("Aspect ratio", selection: $prefs.aspect) {
                         ForEach(AspectRatio.allCases) { Text($0.label).tag($0) }
                     }
-                    Picker("Resolution", selection: $prefs.highResolution) {
-                        Text("12MP").tag(false); Text("48MP").tag(true)
-                    }
-                    .onChange(of: prefs.highResolution) { _, on in model.camera.setHighResolution(on) }
                     Toggle("Grid", isOn: $prefs.showGrid)
                     Toggle("Level", isOn: $prefs.showLevel)
                     Toggle("Full-screen reveal", isOn: $prefs.bigReveal)
                     Toggle("Haptics", isOn: $prefs.haptics)
                     Toggle("Film advance sound", isOn: $prefs.advanceSound)
                 } header: { Text("Capture") } footer: {
-                    Text("The volume buttons also take a photo. Double-tap the viewfinder to switch cameras; long-press it to lock focus and exposure (tap to unlock). 48MP works on the 1× camera with ProRAW: about 75 MB a photo and slower to develop. Full-screen reveal shows each frame developing (in Random mode, that's when you find out the stock).")
+                    Text("The volume buttons also take a photo. Double-tap the viewfinder to switch cameras; long-press it to lock focus and exposure (tap to unlock). Full-screen reveal shows each frame developing (in Random mode, that's when you find out the stock).")
                 }
                 Section {
                     Toggle("Tag location", isOn: $prefs.saveLocation)
@@ -177,25 +131,6 @@ struct SettingsView: View {
 
     private func bytes(_ n: Int64) -> String { ByteCountFormatter.string(fromByteCount: n, countStyle: .file) }
 
-    private func flareLabel(_ v: Double) -> String {
-        switch v {
-        case ..<0.05: "Off"
-        case ..<0.45: "Faint"
-        case ..<0.85: "Subtle"
-        case ..<1.15: "Normal"
-        default: "Strong"
-        }
-    }
-
-    private func grainLabel(_ v: Double) -> String {
-        switch v {
-        case 0: "Off"
-        case ..<0.75: "Fine"
-        case ..<1.25: "Normal"
-        case ..<1.75: "Heavy"
-        default: "Pushed"
-        }
-    }
 }
 
 struct StockManagerView: View {

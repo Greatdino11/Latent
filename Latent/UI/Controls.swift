@@ -2,9 +2,18 @@ import SwiftUI
 
 // MARK: - Stock strip
 
-/// Horizontal row of film "canisters". The first one is Random.
+/// Horizontal row of film "canisters". The first one is Random; the last makes or adds a stock.
+/// Long-press a stock for its options; swipe up on the row for the look drawer.
 struct StockStrip: View {
     @Environment(AppModel.self) private var model
+    var openLook: () -> Void = {}
+
+    @State private var editing: CustomStock?
+    @State private var editingIsNew = false
+    @State private var managing = false
+    @State private var adding = false
+    @State private var pasting = false
+    @State private var pasteCode = ""
 
     var body: some View {
         let prefs = model.prefs
@@ -14,19 +23,89 @@ struct StockStrip: View {
                     StockChip(title: "RANDOM", subtitle: "\(randomCount) stocks", colors: nil, selected: prefs.isRandom)
                         .id(FilmStock.randomID)
                         .onTapGesture { select(FilmStock.randomID) }
+                        .contextMenu {
+                            Button { managing = true } label: { Label("Choose Random's stocks", systemImage: "dice") }
+                        }
                     ForEach(prefs.visibleStocks) { stock in
                         StockChip(title: stock.name.uppercased(), subtitle: "ISO \(stock.iso)",
                                   colors: LUT.chart.map { LUT.preview($0, stock) },
                                   selected: prefs.selectedStockID == stock.id)
                             .id(stock.id)
                             .onTapGesture { select(stock.id) }
+                            .contextMenu { menu(for: stock) }
                     }
+                    AddStockChip()
+                        .onTapGesture { Feedback.selection(); adding = true }
                 }
                 .padding(.horizontal, 16)
             }
             .onAppear { proxy.scrollTo(prefs.isRandom ? FilmStock.randomID : prefs.selectedStockID, anchor: .center) }
             .onChange(of: prefs.selectedStockID) { _, id in withAnimation { proxy.scrollTo(id, anchor: .center) } }
         }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 18).onEnded { g in
+                if g.translation.height < -36, abs(g.translation.height) > abs(g.translation.width) { openLook() }
+            }
+        )
+        .confirmationDialog("Add a stock", isPresented: $adding) {
+            Button("Make a new stock") { edit(CustomStock(), isNew: true) }
+            Button("Paste a stock code") { pasteCode = ""; pasting = true }
+            Button("Manage stocks") { managing = true }
+        }
+        .alert("Add stock from code", isPresented: $pasting) {
+            TextField("LTN1-…", text: $pasteCode)
+            Button("Add") {
+                if let custom = StockCode.decode(pasteCode) {
+                    model.prefs.save(custom)
+                    model.prefs.selectedStockID = custom.id
+                    model.show("Added \(custom.name)")
+                } else {
+                    model.show("That isn't a Latent stock code")
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Paste a code someone shared with you (the whole message is fine).") }
+        .sheet(item: $editing) { custom in
+            NavigationStack {
+                StockEditorView(custom: custom, isNew: editingIsNew)
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { editing = nil } } }
+            }
+        }
+        .sheet(isPresented: $managing) {
+            NavigationStack {
+                StockManagerView()
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { managing = false } } }
+            }
+        }
+    }
+
+    @ViewBuilder private func menu(for stock: FilmStock) -> some View {
+        let prefs = model.prefs
+        if let custom = prefs.customStocks.first(where: { $0.id == stock.id }) {
+            Button { edit(custom, isNew: false) } label: { Label("Edit", systemImage: "slider.horizontal.3") }
+            if let code = StockCode.encode(custom) {
+                ShareLink(item: "\(custom.name) — a Latent film stock. Paste in Latent (tap + at the end of the stocks):\n\(code)") {
+                    Label("Share as code", systemImage: "square.and.arrow.up")
+                }
+            }
+        } else {
+            Button {
+                var c = CustomStock(); c.baseID = stock.id; c.iso = stock.iso; c.name = "My \(stock.name)"
+                edit(c, isNew: true)
+            } label: { Label("Make my own version", systemImage: "plus.square.on.square") }
+        }
+        Button { prefs.toggleRandom(stock.id) } label: {
+            prefs.randomPool.contains(stock.id)
+                ? Label("Remove from Random", systemImage: "dice")
+                : Label("Add to Random", systemImage: "dice.fill")
+        }
+        Button { prefs.toggleHidden(stock.id) } label: { Label("Hide from camera", systemImage: "eye.slash") }
+        Button { managing = true } label: { Label("Manage stocks", systemImage: "list.bullet") }
+    }
+
+    private func edit(_ custom: CustomStock, isNew: Bool) {
+        editingIsNew = isNew
+        editing = custom
     }
 
     private var randomCount: Int {
@@ -38,6 +117,21 @@ struct StockStrip: View {
     private func select(_ id: String) {
         Feedback.selection()
         model.prefs.selectedStockID = id
+    }
+}
+
+/// The last card in the stock row: make a stock or paste a code.
+private struct AddStockChip: View {
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(systemName: "plus").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.amber)
+            Text("NEW").font(Theme.mono(10, .bold)).foregroundStyle(Theme.label)
+        }
+        .frame(width: 52, height: 53)
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.dim, style: StrokeStyle(lineWidth: 1, dash: [3, 3])))
+        .contentShape(Rectangle())
+        .accessibilityLabel("Add a stock")
     }
 }
 

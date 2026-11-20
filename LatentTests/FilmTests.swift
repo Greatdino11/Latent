@@ -399,3 +399,24 @@ final class ContactSheetTests: XCTestCase {
         XCTAssertNil(ContactSheet.render([], title: "T", seed: 1))
     }
 }
+
+final class ContactFrameTests: XCTestCase {
+    /// The sheet shows the whole 3:2 negative; a square crop of a 4:3 frame is marked as the middle three-quarters.
+    func testCropMarkSitsInsideTheFullFrame() async throws {
+        let linear = CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!
+        let scene = CIImage(color: CIColor(red: 0.18, green: 0.18, blue: 0.18, alpha: 1, colorSpace: linear)!)
+            .cropped(to: CGRect(x: 0, y: 0, width: 400, height: 300))
+        let heif = try XCTUnwrap(CIContext().heif10Representation(of: NegativeCodec.encode(scene),
+                                                                    colorSpace: CGColorSpace(name: CGColorSpace.displayP3)!, options: [:]))
+        var recipe = DevelopOptions(); recipe.negativeFormat = NegativeCodec.current
+        recipe.aspect = .r1x1; recipe.grainAmount = 0
+        let (image, mark) = try await Darkroom.shared.contactFrame(negative: heif, recipe: recipe, stock: .honey, maxPixel: 400)
+        XCTAssertEqual(Double(image.width) / Double(image.height), 1.5, accuracy: 0.02)
+        let m = try XCTUnwrap(mark)
+        XCTAssertEqual(m.width, 0.75, accuracy: 0.01); XCTAssertEqual(m.minX, 0.125, accuracy: 0.01)
+
+        recipe.aspect = .r3x2
+        let (_, none) = try await Darkroom.shared.contactFrame(negative: heif, recipe: recipe, stock: .honey, maxPixel: 400)
+        XCTAssertNil(none, "a 3:2 frame needs no mark")
+    }
+}

@@ -230,10 +230,7 @@ final class AppModel {
     func reprint(_ item: RollItem, stock: FilmStock? = nil, edit: (inout DevelopOptions) -> Void = { _ in }) async throws -> String {
         let stock = stock ?? item.stock ?? .clear
         let negative = try Data(contentsOf: item.negativeURL)
-        var options = roll.recipe(for: item)
-        options.grainAmount = prefs.grainAmount
-        options.halation = prefs.halation
-        options.flareAmount = prefs.flareAmount
+        var options = roll.recipe(for: item)      // keeps the frame's own grain, halation and flare
         if stock.id != item.stockID { options.strength = prefs.strength(for: stock) }
         edit(&options)
         let metadata = JPEGEncoder.metadata(of: item.url)
@@ -282,12 +279,13 @@ final class AppModel {
         for (i, item) in ordered.enumerated() {
             progress(i + 1, ordered.count)
             let stock = item.stock ?? .clear
-            var image: CGImage?
-            if item.hasNegative, let neg = try? Data(contentsOf: item.negativeURL) {
-                image = try? await Darkroom.shared.preview(negative: neg, recipe: roll.recipe(for: item), stock: stock, maxPixel: 900)
+            var image: CGImage?, mark: CGRect?
+            if item.hasNegative, let neg = try? Data(contentsOf: item.negativeURL),
+               let made = try? await Darkroom.shared.contactFrame(negative: neg, recipe: roll.recipe(for: item), stock: stock, maxPixel: 900) {
+                (image, mark) = made
             }
             if image == nil { image = await roll.thumbnail(for: item, maxPixel: 900)?.cgImage }
-            if let image { frames.append(.init(image: image, number: i + 1, stock: stock.displayName)) }
+            if let image { frames.append(.init(image: image, number: i + 1, stock: stock.displayName, mark: mark)) }
         }
         let f = DateFormatter(); f.dateFormat = "d MMM yyyy"
         let days = Set(ordered.map { f.string(from: $0.date) })

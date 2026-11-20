@@ -75,6 +75,7 @@ struct StockEditorView: View {
         .safeAreaInset(edge: .bottom) {
             Button {
                 model.prefs.save(custom)
+                if isNew { model.prefs.selectedStockID = custom.id }   // ready to shoot with it
                 Feedback.success()
                 dismiss()
             } label: {
@@ -90,7 +91,7 @@ struct StockEditorView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if !isNew, let code = StockCode.encode(custom) {
-                ShareLink(item: "\(custom.name) — a Latent film stock. Paste in Latent ▸ Settings ▸ Stocks ▸ Add from code:\n\(code)") {
+                ShareLink(item: "\(custom.name) — a Latent film stock. Paste in Latent (tap + at the end of the stocks):\n\(code)") {
                     Image(systemName: "square.and.arrow.up")
                 }
             }
