@@ -6,6 +6,7 @@ import WidgetKit
 struct LatentControlsBundle: WidgetBundle {
     var body: some Widget {
         OpenLatentControl()
+        PhotoWidget()
     }
 }
 
