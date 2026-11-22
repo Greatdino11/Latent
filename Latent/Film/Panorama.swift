@@ -48,21 +48,20 @@ enum Panorama {
         // up would push alpha past 1, which prints as black).
         var acc: CIImage?
         for (i, (img, o)) in zip(projected, offsets).enumerated() {
-            let e = img.extent
-            // Fade in only across the side that overlaps the previous shot; the far side has nothing under it.
-            let previous = i > 0 ? offsets[i - 1].x : o.x
-            let fromLeft = o.x >= previous
-            let ramp = e.width * 0.18
-            let edge = fromLeft ? e.minX : e.maxX
-            let mask = CIFilter(name: "CILinearGradient", parameters: [
-                "inputPoint0": CIVector(x: edge, y: 0), "inputColor0": CIColor.black,
-                "inputPoint1": CIVector(x: fromLeft ? edge + ramp : edge - ramp, y: 0), "inputColor1": CIColor.white])!
-                .outputImage!.cropped(to: e)
-                .composited(over: CIImage(color: .black))
             let t = CGAffineTransform(translationX: o.x, y: o.y)
             let placed = img.transformed(by: t)
-            acc = acc.map { placed.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: $0,
-                                                                                kCIInputMaskImageKey: mask.transformed(by: t)]) } ?? placed
+            guard i > 0, let current = acc else { acc = placed; continue }
+            // Where this shot overlaps the previous one, cut along the line where the two differ least (so a
+            // nearby object or a passer-by comes from one shot, not both), with only a narrow blend across it.
+            let previous = projected[i - 1].transformed(by: CGAffineTransform(translationX: offsets[i - 1].x, y: offsets[i - 1].y))
+            let overlap = previous.extent.intersection(placed.extent).integral
+            let base = CIImage(color: .white).cropped(to: placed.extent).composited(over: CIImage(color: .black))
+            var mask = base
+            if !overlap.isNull, overlap.width > 8,
+               let seam = seamMask(previous: previous, next: placed, overlap: overlap, newOnRight: o.x >= offsets[i - 1].x, context: ctx) {
+                mask = seam.cropped(to: overlap).composited(over: base)
+            }
+            acc = placed.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: current, kCIInputMaskImageKey: mask])
         }
         guard let acc else { throw Failure.tooFew }
 
@@ -124,6 +123,60 @@ enum Panorama {
         // Rows run top to bottom; find the first fully covered row from the top.
         for r in 0..<h where px[r * 4 + 3] > 0.99 { return CGFloat(r) }
         return nil
+    }
+
+    // MARK: seams
+
+    /// A mask over `overlap`: 1 where the new shot should show, 0 where the previous one should. The boundary is
+    /// the top-to-bottom path of least difference between the two (dynamic programming on a small copy), softened
+    /// by a couple of pixels.
+    static func seamMask(previous: CIImage, next: CIImage, overlap: CGRect, newOnRight: Bool, context ctx: CIContext) -> CIImage? {
+        let s = min(1, 360 / Double(overlap.width))
+        let toOrigin = CGAffineTransform(translationX: -overlap.minX, y: -overlap.minY)
+        let a = gray(previous.cropped(to: overlap).transformed(by: toOrigin), scale: s, context: ctx)
+        let b = gray(next.cropped(to: overlap).transformed(by: toOrigin), scale: s, context: ctx)
+        let w = min(a.w, b.w), h = min(a.h, b.h)
+        guard w >= 3, h >= 3 else { return nil }
+        var cost = [Float](repeating: 0, count: w * h)
+        for y in 0..<h {
+            for x in 0..<w {
+                let va = a.px[y * a.w + x], vb = b.px[y * b.w + x]
+                // Difference, a nudge towards the middle of the overlap, and "no picture" counts as very different.
+                var d: Float = va.isNaN || vb.isNaN ? 1 : abs(va - vb)
+                d += 0.03 * abs(Float(x) - Float(w) / 2) / Float(w)
+                if y > 0 {
+                    var m = cost[(y - 1) * w + x]
+                    if x > 0 { m = min(m, cost[(y - 1) * w + x - 1]) }
+                    if x < w - 1 { m = min(m, cost[(y - 1) * w + x + 1]) }
+                    d += m
+                }
+                cost[y * w + x] = d
+            }
+        }
+        // Walk back up from the cheapest end.
+        var seam = [Int](repeating: 0, count: h)
+        var x = (0..<w).min { cost[(h - 1) * w + $0] < cost[(h - 1) * w + $1] } ?? w / 2
+        for y in stride(from: h - 1, through: 0, by: -1) {
+            seam[y] = x
+            guard y > 0 else { break }
+            var best = x
+            for c in [x - 1, x, x + 1] where c >= 0 && c < w && cost[(y - 1) * w + c] < cost[(y - 1) * w + best] { best = c }
+            x = best
+        }
+        var px = [Float](repeating: 0, count: w * h * 4)
+        for y in 0..<h {
+            for x in 0..<w {
+                let v: Float = newOnRight ? (x > seam[y] ? 1 : 0) : (x < seam[y] ? 1 : 0)
+                let i = (y * w + x) * 4
+                px[i] = v; px[i + 1] = v; px[i + 2] = v; px[i + 3] = 1
+            }
+        }
+        let data = px.withUnsafeBufferPointer { Data(buffer: $0) }
+        let small = CIImage(bitmapData: data, bytesPerRow: w * 16, size: CGSize(width: w, height: h), format: .RGBAf, colorSpace: nil)
+        return small.clampedToExtent().applyingGaussianBlur(sigma: 1.2).cropped(to: small.extent)
+            .transformed(by: CGAffineTransform(scaleX: overlap.width / CGFloat(w), y: overlap.height / CGFloat(h)))
+            .transformed(by: CGAffineTransform(translationX: overlap.minX, y: overlap.minY))
+            .cropped(to: overlap)
     }
 
     // MARK: alignment

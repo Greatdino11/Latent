@@ -624,6 +624,24 @@ final class PanoramaTests: XCTestCase {
         XCTAssertEqual(px[3], 1, accuracy: 0.001, "overlaps stay opaque")
     }
 
+    /// Something in one shot's overlap but not the other's (a passer-by, or a close object shifted by parallax)
+    /// comes out whole or not at all — never as a see-through double.
+    func testSeamAvoidsGhosts() throws {
+        let scene = SimulatedScene.capture
+        let e = scene.extent
+        let w = (e.width * 0.5).rounded(), step = (e.width * 0.25).rounded()
+        let a = scene.cropped(to: CGRect(x: e.minX, y: e.minY, width: w, height: e.height))
+        let bar = CGRect(x: e.minX + e.width * 0.28, y: e.minY + e.height * 0.2, width: e.width * 0.03, height: e.height * 0.6)
+        let b = CIImage(color: .black).cropped(to: bar).composited(over: scene)
+            .cropped(to: CGRect(x: e.minX + step, y: e.minY, width: w, height: e.height))
+        let pano = try Panorama.stitch([a, b], focal35: nil)
+        let dx = e.width * 0.75 - pano.extent.width, dy = e.height - pano.extent.height
+        let p = CGPoint(x: (bar.midX - e.minX - dx / 2).rounded(), y: (bar.midY - e.minY - dy / 2).rounded())
+        let got = pixel(pano, p), original = pixel(scene, CGPoint(x: bar.midX, y: bar.midY))
+        let ratio = (got.x + got.y + got.z) / max(0.001, original.x + original.y + original.z)
+        XCTAssertTrue(ratio < 0.1 || ratio > 0.9, "the object is either there or not, never half (ratio \(ratio))")
+    }
+
     func testRejectsUnrelatedFrames() {
         let a = SimulatedScene.capture
         let b = CIImage(color: .gray).cropped(to: a.extent)
