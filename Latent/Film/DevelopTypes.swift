@@ -22,6 +22,13 @@ enum AspectRatio: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+/// The lab scanner the roll went through.
+enum ScannerLook: String, CaseIterable, Identifiable, Codable {
+    case frontier, noritsu
+    var id: String { rawValue }
+    var label: String { rawValue.capitalized }
+}
+
 enum FrameStyle: String, CaseIterable, Identifiable, Codable {
     case none, white, black, film
     var id: String { rawValue }
@@ -80,6 +87,10 @@ struct DevelopOptions: Codable {
     var fullResolution: Bool? = nil
     /// Process Zero: one unmerged sensor frame, developed without noise reduction (its own noise is the grain).
     var processZero: Bool? = nil
+    /// How expired the film was (0…1): fogged blacks, faded contrast, a colour shift and coarser grain.
+    var expired: Double? = nil
+    /// Scanner character; nil = a plain scan.
+    var scanner: ScannerLook? = nil
     /// Light leak strength (0…1); nil = none.
     var lightLeak: Double? = nil
     /// Dust specks and hairline scratches from the "scan".

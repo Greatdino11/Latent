@@ -43,6 +43,9 @@ enum FilmPipeline {
         grade.colorSpace = CGColorSpace(name: CGColorSpace.sRGB)
         img = grade.outputImage ?? img
 
+        // Expired film ages the emulsion itself: before glow, leaks and grain sit on top.
+        if let e = options.expired, e > 0.01 { img = expire(img, amount: e, seed: options.seed) }
+
         // Direct flash on film: harder contrast and a hot halo on the lit subject.
         let flash = options.flashFired == true
         if flash {
@@ -100,9 +103,52 @@ enum FilmPipeline {
 
         // 10. Grain last, on top of everything, like real silver.
         // A Process Zero frame already carries real sensor noise: add less synthetic grain on top.
-        img = grain(on: img, stock: stock, user: options.grainAmount * (options.processZero == true ? 0.6 : 1), extent: extent, short: short)
+        // Expired film is grainier too.
+        let grainUser = options.grainAmount * (options.processZero == true ? 0.6 : 1) * (1 + 0.8 * (options.expired ?? 0))
+        img = grain(on: img, stock: stock, user: grainUser, extent: extent, short: short)
+
+        // 11. The lab scanner reads the whole frame, grain included.
+        if let scanner = options.scanner { img = scan(img, scanner) }
 
         return img.cropped(to: extent)
+    }
+
+    /// Expired film: base fog lifts and tints the blacks, contrast and saturation fade, and the colour drifts. Which
+    /// way it drifts (magenta, green, warm or cyan) is fixed per frame by `seed`, like a batch of old film.
+    static func expire(_ img: CIImage, amount e: Double, seed: UInt64) -> CIImage {
+        var rng = SeededRandom(seed: seed ^ 0xE891_2ED0)
+        let casts: [RGB] = [RGB(0.05, -0.04, 0.04), RGB(-0.04, 0.04, -0.03), RGB(0.05, 0.02, -0.06), RGB(-0.04, 0.0, 0.05)]
+        let cast = casts[Int(rng.unit() * Double(casts.count)) % casts.count] * (e * (0.6 + 0.4 * rng.unit()))
+        // Core Image works in linear light here: a little lift goes a long way once encoded for display.
+        let fog = RGB(0.030, 0.021, 0.017) * e                      // orange-brown base fog
+        let k = 1 - 0.25 * e
+        let faded = img.applyingFilter("CIColorControls", parameters: [kCIInputContrastKey: 1 - 0.15 * e, kCIInputSaturationKey: 1 - 0.3 * e])
+        return faded.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: k * (1 + cast.x), y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 0, y: k * (1 + cast.y), z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: k * (1 + cast.z), w: 0),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+            "inputBiasVector": CIVector(x: fog.x + 0.012 * e, y: fog.y + 0.012 * e, z: fog.z + 0.012 * e, w: 0)])
+    }
+
+    /// The lab scanner's character. Frontier: punchier, warmer, richer colour. Noritsu: flatter and truer, more open
+    /// shadows, slightly cooler.
+    static func scan(_ img: CIImage, _ s: ScannerLook) -> CIImage {
+        switch s {
+        case .frontier:
+            return img.applyingFilter("CIColorControls", parameters: [kCIInputContrastKey: 1.07, kCIInputSaturationKey: 1.08])
+                .applyingFilter("CIVibrance", parameters: ["inputAmount": 0.12])
+                .applyingFilter("CIColorMatrix", parameters: [
+                    "inputRVector": CIVector(x: 1.02, y: 0, z: 0, w: 0), "inputGVector": CIVector(x: 0, y: 1.0, z: 0, w: 0),
+                    "inputBVector": CIVector(x: 0, y: 0, z: 0.97, w: 0), "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+                    "inputBiasVector": CIVector(x: 0, y: 0.0012, z: 0.002, w: 0)])   // a hint of cyan-green in the blacks
+        case .noritsu:
+            return img.applyingFilter("CIColorControls", parameters: [kCIInputContrastKey: 0.93, kCIInputSaturationKey: 0.96])
+                .applyingFilter("CIColorMatrix", parameters: [
+                    "inputRVector": CIVector(x: 0.985, y: 0, z: 0, w: 0), "inputGVector": CIVector(x: 0, y: 0.985, z: 0, w: 0),
+                    "inputBVector": CIVector(x: 0, y: 0, z: 1.0, w: 0), "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+                    "inputBiasVector": CIVector(x: 0.003, y: 0.003, z: 0.003, w: 0)])
+        }
     }
 
     /// The largest whole-pixel rectangle inside `r`. Scaled RAW decodes have fractional edges; rounding outward

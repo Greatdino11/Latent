@@ -517,3 +517,31 @@ final class LongExposureTests: XCTestCase {
         XCTAssertEqual(LongExposure.label(8), "8\"")
     }
 }
+
+final class LabLookTests: XCTestCase {
+    private func value(_ i: CIImage) -> RGB {
+        var px = [Float](repeating: 0, count: 4)
+        CIContext().render(i, toBitmap: &px, rowBytes: 16, bounds: CGRect(x: 2, y: 2, width: 1, height: 1), format: .RGBAf,
+                           colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!)
+        return RGB(Double(px[0]), Double(px[1]), Double(px[2]))
+    }
+    private func patch(_ v: Double) -> CIImage {
+        CIImage(color: CIColor(red: v, green: v, blue: v, alpha: 1, colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!)!)
+            .cropped(to: CGRect(x: 0, y: 0, width: 4, height: 4))
+    }
+
+    /// Expired film lifts the blacks and pulls the whites down: less contrast.
+    func testExpiredFogsAndFades() {
+        let black = value(FilmPipeline.expire(patch(0.02), amount: 1, seed: 7)), white = value(FilmPipeline.expire(patch(0.95), amount: 1, seed: 7))
+        XCTAssertGreaterThan(black.sum() / 3, 0.08)
+        XCTAssertLessThan(white.sum() / 3, 0.9)
+        let none = value(FilmPipeline.expire(patch(0.5), amount: 0, seed: 7))
+        XCTAssertEqual(none.sum() / 3, 0.5, accuracy: 0.01)
+    }
+
+    /// Frontier scans are punchier than Noritsu's.
+    func testFrontierHasMoreContrastThanNoritsu() {
+        func spread(_ s: ScannerLook) -> Double { value(FilmPipeline.scan(patch(0.85), s)).sum() - value(FilmPipeline.scan(patch(0.15), s)).sum() }
+        XCTAssertGreaterThan(spread(.frontier), spread(.noritsu))
+    }
+}

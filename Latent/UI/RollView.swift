@@ -320,7 +320,7 @@ private struct RollCell: View {
 
 // MARK: - Pager
 
-private enum DevelopTool: String, CaseIterable { case film = "FILM", light = "LIGHT", texture = "TEXTURE", lens = "LENS", frame = "FRAME" }
+private enum DevelopTool: String, CaseIterable { case film = "FILM", light = "LIGHT", texture = "TEXTURE", lab = "LAB", lens = "LENS", frame = "FRAME" }
 
 private struct PhotoPager: View {
     @Environment(AppModel.self) private var model
@@ -358,6 +358,8 @@ private struct PhotoPager: View {
     @State private var grain = 1.0
     @State private var halation = true
     @State private var flare = 0.6
+    @State private var expired = 0.0
+    @State private var scanner: ScannerLook?
     @State private var loadedFor = ""
 
     private var item: RollItem? { model.roll.item(id: selection) }
@@ -496,6 +498,7 @@ private struct PhotoPager: View {
             case .film: filmTool
             case .light: lightTool
             case .texture: textureTool
+            case .lab: labTool
             case .frame: frameTool
             case .lens: lensTool
             }
@@ -584,6 +587,23 @@ private struct PhotoPager: View {
             HStack {
                 LookChip(title: halation ? "HALATION ✓" : "HALATION", on: halation) { halation.toggle(); apply() }
                 Spacer()
+            }
+        }
+        .padding(.horizontal, 18)
+    }
+
+    /// Expired film and the lab scanner, for this frame.
+    private var labTool: some View {
+        VStack(spacing: 12) {
+            LookSlider(title: "EXPIRED", value: $expired, range: 0...1, step: 0.05,
+                       label: { $0 < 0.01 ? "FRESH" : LookLabels.percent($0) }) { apply() }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    chip("PLAIN SCAN", on: scanner == nil) { scanner = nil; apply() }
+                    ForEach(ScannerLook.allCases) { s in
+                        chip(s.label.uppercased(), on: scanner == s) { scanner = s; apply() }
+                    }
+                }
             }
         }
         .padding(.horizontal, 18)
@@ -680,6 +700,8 @@ private struct PhotoPager: View {
         grain = r.grainAmount
         halation = r.halation
         flare = r.flareStrength
+        expired = r.expired ?? 0
+        scanner = r.scanner
         if tool == .lens, !item.hasDepth { tool = .film }
         loadedFor = item.id
     }
@@ -697,6 +719,7 @@ private struct PhotoPager: View {
         let (lk, du) = (leak, dust)
         let (ln, bl, fc) = (lens, blur, focus)
         let (gr, ha, fl) = (grain, halation, flare)
+        let (ex, sc) = (expired, scanner)
         Task {
             do {
                 status = try await model.reprint(item, stock: stock) { o in
@@ -705,6 +728,7 @@ private struct PhotoPager: View {
                     o.lightLeak = lk > 0 ? lk : nil; o.dust = du ? true : nil
                     o.portraitLens = ln; o.blurAmount = bl; o.focusDepth = fc
                     o.grainAmount = gr; o.halation = ha; o.flareAmount = fl
+                    o.expired = ex > 0.01 ? ex : nil; o.scanner = sc
                 }
             } catch {
                 status = error.localizedDescription

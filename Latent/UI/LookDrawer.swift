@@ -122,6 +122,16 @@ struct LookDrawer: View {
                     }
                 }
 
+                group("LAB", note: "Expired film fogs the blacks, fades the colour and shifts it a different way each frame. The scanner is the lab's: Frontier is punchy and warm, Noritsu flatter and truer.") {
+                    LookSlider(title: "EXPIRED", value: $prefs.expired, range: 0...1, step: 0.05, label: { $0 < 0.01 ? "FRESH" : LookLabels.percent($0) })
+                    chips {
+                        LookChip(title: "PLAIN SCAN", on: prefs.scanner == nil) { prefs.scanner = nil }
+                        ForEach(ScannerLook.allCases) { s in
+                            LookChip(title: s.label.uppercased(), on: prefs.scanner == s) { prefs.scanner = s }
+                        }
+                    }
+                }
+
                 group("LIGHT LEAKS") {
                     chips {
                         LookChip(title: "OFF", on: prefs.lightLeak == 0) { prefs.lightLeak = 0 }
@@ -204,7 +214,7 @@ struct LookDrawer: View {
     private func reset() {
         let p = model.prefs
         p.grainAmount = 1; p.flareAmount = 0.6; p.halation = true; p.dust = false; p.dateStamp = false
-        p.lightLeak = 0; p.frameStyle = .none; p.blurAmount = 0.6
+        p.lightLeak = 0; p.frameStyle = .none; p.blurAmount = 0.6; p.expired = 0; p.scanner = nil
         if !p.isRandom { p.stockStrength[p.selectedStockID] = nil }
         if p.highResolution || p.zeroProcess { setCapture(highRes: false, zero: false) }
         if p.shutter > 0 { p.shutter = 0; model.camera.setSlowShutter(0) }
@@ -230,6 +240,8 @@ enum ActiveLook {
         }
         if p.lightLeak > 0 { out.append(p.lightLeak < 0.75 ? "LEAKS" : "STRONG LEAKS") }
         if p.dust { out.append("DUST") }
+        if p.expired > 0.01 { out.append("EXPIRED \(LookLabels.percent(p.expired))") }
+        if let s = p.scanner { out.append(s.label.uppercased()) }
         switch p.frameStyle {
         case .none: break
         case .film: out.append("35MM")

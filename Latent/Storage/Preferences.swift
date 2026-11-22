@@ -24,6 +24,10 @@ final class Preferences {
     var shutter: Double { didSet { d.set(shutter, forKey: "shutter") } }
     /// Long exposures keep moving lights as solid trails.
     var trails: Bool { didSet { d.set(trails, forKey: "trails") } }
+    /// Expired-film amount for new frames (0…1).
+    var expired: Double { didSet { d.set(expired, forKey: "expired") } }
+    /// Lab scanner look for new frames.
+    var scanner: ScannerLook? { didSet { d.set(scanner?.rawValue ?? "", forKey: "scanner") } }
     var portraitLens: PortraitLens { didSet { d.set(portraitLens.rawValue, forKey: "portraitLens") } }
     var blurAmount: Double { didSet { d.set(blurAmount, forKey: "blurAmount") } }
     var saveToPhotos: Bool { didSet { d.set(saveToPhotos, forKey: "saveToPhotos") } }
@@ -54,7 +58,7 @@ final class Preferences {
     init() {
         d.register(defaults: [
             "selectedStock": FilmStock.randomID, "aspect": AspectRatio.r3x2.rawValue, "grain": 1.0,
-            "halation": true, "flareAmount": 0.6, "dateStamp": false, "frame": FrameStyle.none.rawValue, "lightLeak": 0.0, "dust": false, "hires": false, "zero": false, "shutter": 0.0, "trails": true, "portraitLens": PortraitLens.classic.rawValue, "blurAmount": 0.6,
+            "halation": true, "flareAmount": 0.6, "dateStamp": false, "frame": FrameStyle.none.rawValue, "lightLeak": 0.0, "dust": false, "hires": false, "zero": false, "shutter": 0.0, "trails": true, "expired": 0.0, "portraitLens": PortraitLens.classic.rawValue, "blurAmount": 0.6,
             "saveToPhotos": true, "saveOriginal": false, "grid": false, "level": true, "meter": true,
             "saveLocation": false, "haptics": true, "advanceSound": false, "bigReveal": false,
         ])
@@ -74,6 +78,8 @@ final class Preferences {
         zeroProcess = d.bool(forKey: "zero")
         shutter = d.double(forKey: "shutter")
         trails = d.bool(forKey: "trails")
+        expired = d.double(forKey: "expired")
+        scanner = ScannerLook(rawValue: d.string(forKey: "scanner") ?? "")
         portraitLens = PortraitLens(rawValue: d.string(forKey: "portraitLens") ?? "") ?? .classic
         blurAmount = d.double(forKey: "blurAmount")
         saveToPhotos = d.bool(forKey: "saveToPhotos")

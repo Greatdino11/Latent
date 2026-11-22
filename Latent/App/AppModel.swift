@@ -146,6 +146,8 @@ final class AppModel {
         if prefs.lightLeak > 0 { o.lightLeak = prefs.lightLeak }
         if portrait { o.portraitLens = prefs.portraitLens; o.blurAmount = prefs.blurAmount }
         if prefs.dust { o.dust = true }
+        if prefs.expired > 0.01 { o.expired = prefs.expired }
+        o.scanner = prefs.scanner
         return o
     }
 
