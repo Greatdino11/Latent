@@ -129,10 +129,13 @@ struct LookDrawer: View {
                     LookSlider(title: "BLUR", value: $prefs.blurAmount, range: 0.1...1, label: LookLabels.percent)
                 }
 
-                group("RAW", note: "48MP uses the 1× camera: about 75 MB a photo and slower to develop.") {
+                group("RAW", note: prefs.zeroProcess
+                      ? "ZERO: one frame straight off the sensor, no Apple processing. Real sensor grain, softer and truer; 12MP, noisier in low light, highlights clip sooner."
+                      : "48MP uses the 1× camera: about 75 MB a photo and slower to develop. ZERO skips Apple's processing entirely.") {
                     chips {
-                        LookChip(title: "12MP", on: !prefs.highResolution) { setHighResolution(false) }
-                        LookChip(title: "48MP", on: prefs.highResolution) { setHighResolution(true) }
+                        LookChip(title: "12MP", on: !prefs.highResolution && !prefs.zeroProcess) { setCapture(highRes: false, zero: false) }
+                        LookChip(title: "48MP", on: prefs.highResolution && !prefs.zeroProcess) { setCapture(highRes: true, zero: false) }
+                        LookChip(title: "ZERO", on: prefs.zeroProcess) { setCapture(highRes: false, zero: true) }
                     }
                 }
 
@@ -169,6 +172,15 @@ struct LookDrawer: View {
         model.camera.setHighResolution(on)
     }
 
+    /// 12MP, 48MP and ZERO are one choice: ZERO (single-frame Bayer RAW) is always 12MP.
+    private func setCapture(highRes: Bool, zero: Bool) {
+        if model.prefs.zeroProcess != zero {
+            model.prefs.zeroProcess = zero
+            model.camera.setZero(zero)
+        }
+        setHighResolution(highRes)
+    }
+
     private var isDefault: Bool { ActiveLook.items(model).isEmpty }
 
     private func reset() {
@@ -176,7 +188,7 @@ struct LookDrawer: View {
         p.grainAmount = 1; p.flareAmount = 0.6; p.halation = true; p.dust = false; p.dateStamp = false
         p.lightLeak = 0; p.frameStyle = .none; p.blurAmount = 0.6
         if !p.isRandom { p.stockStrength[p.selectedStockID] = nil }
-        if p.highResolution { setHighResolution(false) }
+        if p.highResolution || p.zeroProcess { setCapture(highRes: false, zero: false) }
     }
 }
 
@@ -205,7 +217,7 @@ enum ActiveLook {
         case .white, .black: out.append("\(p.frameStyle.label.uppercased()) BORDER")
         }
         if p.dateStamp { out.append("DATE") }
-        if p.highResolution { out.append("48MP") }
+        if p.zeroProcess { out.append("ZERO") } else if p.highResolution { out.append("48MP") }
         return out
     }
 }

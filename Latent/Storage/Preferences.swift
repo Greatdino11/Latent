@@ -18,6 +18,8 @@ final class Preferences {
     var dust: Bool { didSet { d.set(dust, forKey: "dust") } }
     /// 48MP ProRAW (main camera) instead of 12MP.
     var highResolution: Bool { didSet { d.set(highResolution, forKey: "hires") } }
+    /// Process Zero: one unmerged Bayer RAW frame, no Apple processing (12MP).
+    var zeroProcess: Bool { didSet { d.set(zeroProcess, forKey: "zero") } }
     var portraitLens: PortraitLens { didSet { d.set(portraitLens.rawValue, forKey: "portraitLens") } }
     var blurAmount: Double { didSet { d.set(blurAmount, forKey: "blurAmount") } }
     var saveToPhotos: Bool { didSet { d.set(saveToPhotos, forKey: "saveToPhotos") } }
@@ -47,7 +49,7 @@ final class Preferences {
     init() {
         d.register(defaults: [
             "selectedStock": FilmStock.randomID, "aspect": AspectRatio.r3x2.rawValue, "grain": 1.0,
-            "halation": true, "flareAmount": 0.6, "dateStamp": false, "frame": FrameStyle.none.rawValue, "lightLeak": 0.0, "dust": false, "hires": false, "portraitLens": PortraitLens.classic.rawValue, "blurAmount": 0.6,
+            "halation": true, "flareAmount": 0.6, "dateStamp": false, "frame": FrameStyle.none.rawValue, "lightLeak": 0.0, "dust": false, "hires": false, "zero": false, "portraitLens": PortraitLens.classic.rawValue, "blurAmount": 0.6,
             "saveToPhotos": true, "saveOriginal": false, "grid": false, "level": true,
             "saveLocation": false, "haptics": true, "advanceSound": false, "bigReveal": false,
         ])
@@ -64,6 +66,7 @@ final class Preferences {
         lightLeak = d.double(forKey: "lightLeak")
         dust = d.bool(forKey: "dust")
         highResolution = d.bool(forKey: "hires")
+        zeroProcess = d.bool(forKey: "zero")
         portraitLens = PortraitLens(rawValue: d.string(forKey: "portraitLens") ?? "") ?? .classic
         blurAmount = d.double(forKey: "blurAmount")
         saveToPhotos = d.bool(forKey: "saveToPhotos")

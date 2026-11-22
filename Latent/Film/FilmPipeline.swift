@@ -99,7 +99,8 @@ enum FilmPipeline {
         }
 
         // 10. Grain last, on top of everything, like real silver.
-        img = grain(on: img, stock: stock, user: options.grainAmount, extent: extent, short: short)
+        // A Process Zero frame already carries real sensor noise: add less synthetic grain on top.
+        img = grain(on: img, stock: stock, user: options.grainAmount * (options.processZero == true ? 0.6 : 1), extent: extent, short: short)
 
         return img.cropped(to: extent)
     }

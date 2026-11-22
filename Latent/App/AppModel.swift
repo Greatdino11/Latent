@@ -65,6 +65,7 @@ final class AppModel {
     func launch() async {
         FilmAdvanceSound.configureSession()   // never interrupt music or podcasts
         camera.setHighResolution(prefs.highResolution)
+        camera.setZero(prefs.zeroProcess)
         await camera.start()
         updateSensors()
         photosSync.refresh()
@@ -135,7 +136,7 @@ final class AppModel {
             date: Date()
         )
         o.strength = prefs.strength(for: stock)
-        if prefs.highResolution { o.fullResolution = true }
+        if prefs.highResolution && !prefs.zeroProcess { o.fullResolution = true }
         if prefs.lightLeak > 0 { o.lightLeak = prefs.lightLeak }
         if portrait { o.portraitLens = prefs.portraitLens; o.blurAmount = prefs.blurAmount }
         if prefs.dust { o.dust = true }

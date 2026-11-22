@@ -51,6 +51,10 @@ final class CameraController: NSObject {
     @ObservationIgnored private var wantsRunning = true
     @ObservationIgnored private var wantsPortrait = false
     @ObservationIgnored private var wantsHighResolution = false
+    /// Process Zero: capture one unmerged Bayer RAW frame instead of ProRAW.
+    @ObservationIgnored private var wantsZero = false
+    @ObservationIgnored private var ultraWideCamera: AVCaptureDevice?
+    @ObservationIgnored private var teleCamera: AVCaptureDevice?
     /// The back camera as one virtual device (smooth lens switching, but its photos stop at 12MP).
     @ObservationIgnored private var virtualDevice: AVCaptureDevice?
     /// The plain main camera: the only way to get its full 48MP. Used at 1× when 48MP is on.
@@ -138,7 +142,7 @@ final class CameraController: NSObject {
             photoOutput.isPortraitEffectsMatteDeliveryEnabled = false
             photoOutput.isDepthDataDeliveryEnabled = false
             if session.canSetSessionPreset(.photo) { session.sessionPreset = .photo }   // back to the full-res format
-            photoOutput.isAppleProRAWEnabled = photoOutput.isAppleProRAWSupported
+            photoOutput.isAppleProRAWEnabled = photoOutput.isAppleProRAWSupported && !wantsZero
         }
         pickPhotoDimensions(dev)
         if (try? dev.lockForConfiguration()) != nil {           // a format change resets zoom: keep the chosen lens
@@ -165,7 +169,7 @@ final class CameraController: NSObject {
     private func pickPhotoDimensions(_ dev: AVCaptureDevice) {
         let dims = dev.activeFormat.supportedMaxPhotoDimensions
         let area: (CMVideoDimensions) -> Int = { Int($0.width) * Int($0.height) }
-        let limit = wantsHighResolution ? Int.max : 12_600_000
+        let limit = wantsHighResolution && !wantsZero ? Int.max : 12_600_000   // single-frame RAW is 12MP
         if let pick = dims.filter({ area($0) <= limit }).max(by: { area($0) < area($1) }) ?? dims.min(by: { area($0) < area($1) }) {
             photoOutput.maxPhotoDimensions = pick
         }
@@ -177,9 +181,17 @@ final class CameraController: NSObject {
     @discardableResult
     private func routeForResolution() -> Bool {
         guard configured, !wantsPortrait, let virtual = virtualDevice, let main = mainCamera, let current = device else { return false }
-        let wantMain = wantsHighResolution && abs(lensZoom - baseZoom) < 0.01
+        let atBase = abs(lensZoom - baseZoom) < 0.01
+        let wantMain = wantsHighResolution && atBase
             && main.formats.contains { $0.supportedMaxPhotoDimensions.contains { Int($0.width) * Int($0.height) > 40_000_000 } }
-        let target = wantMain ? main : virtual
+        // Process Zero needs a single physical camera too (virtual devices don't deliver Bayer RAW): the one behind
+        // the chosen lens.
+        var target = wantMain ? main : virtual
+        if wantsZero {
+            if lensZoom < baseZoom - 0.01, let uw = ultraWideCamera { target = uw }
+            else if lensZoom > baseZoom * 2.5, let tele = teleCamera { target = tele }
+            else { target = main }
+        }
         guard target.uniqueID != current.uniqueID, let newInput = try? AVCaptureDeviceInput(device: target) else { return false }
         session.beginConfiguration()
         if let input { session.removeInput(input) }
@@ -190,21 +202,46 @@ final class CameraController: NSObject {
         session.addInput(newInput)
         input = newInput
         device = target
-        if wantMain { Self.useHighResolutionFormat(target) } else if session.canSetSessionPreset(.photo) { session.sessionPreset = .photo }
-        photoOutput.isAppleProRAWEnabled = photoOutput.isAppleProRAWSupported
+        if wantMain && !wantsZero { Self.useHighResolutionFormat(target) } else if session.canSetSessionPreset(.photo) { session.sessionPreset = .photo }
+        photoOutput.isAppleProRAWEnabled = photoOutput.isAppleProRAWSupported && !wantsZero
         pickPhotoDimensions(target)
         if let conn = photoOutput.connection(with: .video), conn.isVideoMirroringSupported {
             conn.automaticallyAdjustsVideoMirroring = false; conn.isVideoMirrored = false
         }
         session.commitConfiguration()
         rotation = AVCaptureDevice.RotationCoordinator(device: target, previewLayer: nil)
-        apply(zoom: wantMain ? 1 : lensZoom)
+        apply(zoom: zoomOnCurrentDevice)
         if (try? target.lockForConfiguration()) != nil {
             target.setExposureTargetBias(min(max(exposureBias, target.minExposureTargetBias), target.maxExposureTargetBias))
             target.unlockForConfiguration()
         }
         Task { @MainActor in self.aeafLocked = false }
         return true
+    }
+
+    /// The zoom to set for the chosen lens on whichever camera is in the session: the virtual camera zooms between
+    /// its lenses; the main camera on its own only for a 2× crop; the other physical lenses not at all.
+    private var zoomOnCurrentDevice: CGFloat {
+        guard let device else { return lensZoom }
+        if !device.constituentDevices.isEmpty || virtualDevice == nil { return lensZoom }
+        if device.uniqueID == mainCamera?.uniqueID { return max(1, lensZoom / baseZoom) }
+        return 1
+    }
+
+    /// Switches Process Zero (single-frame Bayer RAW) on or off.
+    func setZero(_ on: Bool) {
+        queue.async {
+            self.wantsZero = on
+            guard self.configured, let dev = self.device else { return }
+            if self.routeForResolution() { return }
+            self.session.beginConfiguration()
+            // Leave a 48MP sensor format behind: single-frame RAW is 12MP.
+            if on, !self.wantsPortrait, self.session.canSetSessionPreset(.photo) { self.session.sessionPreset = .photo }
+            if !self.wantsPortrait { self.photoOutput.isAppleProRAWEnabled = self.photoOutput.isAppleProRAWSupported && !on }
+            self.pickPhotoDimensions(dev)
+            self.session.commitConfiguration()
+            self.apply(zoom: self.zoomOnCurrentDevice)
+        }
     }
 
     /// The .photo preset usually already allows 48MP; if not, pick the 4:3 format that does.
@@ -288,7 +325,7 @@ final class CameraController: NSObject {
         // phone's tone mapping and sharpening. Portrait turns depth on below, after the session is set up.
         photoOutput.isPortraitEffectsMatteDeliveryEnabled = false
         photoOutput.isDepthDataDeliveryEnabled = false
-        photoOutput.isAppleProRAWEnabled = photoOutput.isAppleProRAWSupported
+        photoOutput.isAppleProRAWEnabled = photoOutput.isAppleProRAWSupported && !wantsZero
         pickPhotoDimensions(dev)
         // Selfies come out the way the viewfinder showed them.
         if let conn = photoOutput.connection(with: .video), conn.isVideoMirroringSupported {
@@ -319,6 +356,8 @@ final class CameraController: NSObject {
         }
         virtualDevice = position == .back && !dev.constituentDevices.isEmpty ? dev : nil
         mainCamera = position == .back ? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) : nil
+        ultraWideCamera = position == .back ? AVCaptureDevice.default(.builtInUltraWideCamera, for: .video, position: .back) : nil
+        teleCamera = position == .back ? AVCaptureDevice.default(.builtInTelephotoCamera, for: .video, position: .back) : nil
 
         configured = true
         routeForResolution()
@@ -347,7 +386,7 @@ final class CameraController: NSObject {
         selectedLens = lens.id
         queue.async {
             self.lensZoom = lens.zoomFactor
-            if !self.routeForResolution() { self.apply(zoom: lens.zoomFactor) }
+            if !self.routeForResolution() { self.apply(zoom: self.zoomOnCurrentDevice) }
         }
     }
 
@@ -413,7 +452,12 @@ final class CameraController: NSObject {
             queue.async {
                 let settings: AVCapturePhotoSettings
                 let portrait = self.photoOutput.isDepthDataDeliveryEnabled
-                if !portrait, let raw = self.photoOutput.availableRawPhotoPixelFormatTypes.first(where: { AVCapturePhotoOutput.isAppleProRAWPixelFormat($0) }) {
+                let bayer = self.wantsZero && !portrait
+                    ? self.photoOutput.availableRawPhotoPixelFormatTypes.first(where: { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) })
+                    : nil
+                if let bayer {
+                    settings = AVCapturePhotoSettings(rawPixelFormatType: bayer)
+                } else if !portrait, let raw = self.photoOutput.availableRawPhotoPixelFormatTypes.first(where: { AVCapturePhotoOutput.isAppleProRAWPixelFormat($0) }) {
                     settings = AVCapturePhotoSettings(rawPixelFormatType: raw)
                 } else if self.photoOutput.availablePhotoCodecTypes.contains(.hevc) {
                     settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.hevc])
@@ -423,7 +467,7 @@ final class CameraController: NSObject {
                 settings.maxPhotoDimensions = self.photoOutput.maxPhotoDimensions
                 // Less multi-frame fusion = less of the over-processed phone look. In low light, allow full
                 // multi-frame capture instead: it's what keeps night frames from turning to noise.
-                settings.photoQualityPrioritization = self.isLowLight ? .quality : .balanced
+                settings.photoQualityPrioritization = bayer != nil ? .speed : self.isLowLight ? .quality : .balanced
                 if self.photoOutput.supportedFlashModes.contains(flash.avMode) { settings.flashMode = flash.avMode }
                 if portrait {
                     settings.isDepthDataDeliveryEnabled = true
@@ -439,7 +483,7 @@ final class CameraController: NSObject {
                     conn.videoRotationAngle = angle
                 }
                 let id = settings.uniqueID
-                let delegate = PhotoDelegate(location: location) { [weak self] result in
+                let delegate = PhotoDelegate(location: location, singleFrame: bayer != nil) { [weak self] result in
                     self?.queue.async { self?.inFlight[id] = nil }
                     cont.resume(with: result)
                 }
@@ -452,9 +496,11 @@ final class CameraController: NSObject {
 
 private final class PhotoDelegate: NSObject, AVCapturePhotoCaptureDelegate {
     private let location: CLLocation?
+    private let singleFrame: Bool
     private let completion: (Result<CapturedFrame, Error>) -> Void
-    init(location: CLLocation?, completion: @escaping (Result<CapturedFrame, Error>) -> Void) {
+    init(location: CLLocation?, singleFrame: Bool, completion: @escaping (Result<CapturedFrame, Error>) -> Void) {
         self.location = location
+        self.singleFrame = singleFrame
         self.completion = completion
     }
 
@@ -462,7 +508,9 @@ private final class PhotoDelegate: NSObject, AVCapturePhotoCaptureDelegate {
         if let error { completion(.failure(error)); return }
         guard let data = photo.fileDataRepresentation() else { completion(.failure(CameraError.noData)); return }
         let source: FrameSource = photo.isRawPhoto ? .raw(data) : .processed(data)
-        completion(.success(CapturedFrame(source: source, metadata: photo.metadata,
-                                          flashFired: photo.resolvedSettings.isFlashEnabled, location: location)))
+        var frame = CapturedFrame(source: source, metadata: photo.metadata,
+                                  flashFired: photo.resolvedSettings.isFlashEnabled, location: location)
+        frame.singleFrame = singleFrame && photo.isRawPhoto
+        completion(.success(frame))
     }
 }

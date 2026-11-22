@@ -27,6 +27,7 @@ actor Darkroom {
         clock.lap("decode")
         options.sceneReferred = sceneReferred
         if frame.flashFired { options.flashFired = true }
+        if frame.singleFrame { options.processZero = true }
         options.negativeFormat = NegativeCodec.current
         // Depth (portrait captures, iPhone Portrait-mode imports): kept so blur and focus can change later.
         var depth: (image: CIImage, png: Data)?
@@ -304,6 +305,12 @@ actor Darkroom {
             raw.extendedDynamicRangeAmount = 1
             if raw.isLocalToneMapSupported { raw.localToneMapAmount = 0 }
             if raw.isSharpnessSupported { raw.sharpnessAmount = 0 }
+            if frame.singleFrame {
+                // Process Zero: keep the sensor's own luminance noise (it reads as grain); calm only the colour
+                // speckle, which film doesn't have.
+                if raw.isLuminanceNoiseReductionSupported { raw.luminanceNoiseReductionAmount = 0 }
+                if raw.isColorNoiseReductionSupported { raw.colorNoiseReductionAmount = 0.6 }
+            }
             if raw.isContrastSupported { raw.contrastAmount = 0 }
             guard var image = raw.outputImage else { throw DarkroomError.decode }
             // A scaled decode's last row/column is only partly covered (e.g. 8064 × 0.5001 = 4033.2 of 4034 px)

@@ -78,6 +78,8 @@ struct DevelopOptions: Codable {
     var cropShift: Double? = nil
     /// Develop large RAWs at full resolution (48MP) instead of ~12MP.
     var fullResolution: Bool? = nil
+    /// Process Zero: one unmerged sensor frame, developed without noise reduction (its own noise is the grain).
+    var processZero: Bool? = nil
     /// Light leak strength (0…1); nil = none.
     var lightLeak: Double? = nil
     /// Dust specks and hairline scratches from the "scan".
@@ -104,6 +106,8 @@ struct CapturedFrame {
     let location: CLLocation?
     /// A ready-made normalised depth map (tests / simulator); otherwise depth is read from the photo data.
     var depth: CIImage?
+    /// One unmerged Bayer RAW frame (Process Zero) rather than Apple's multi-frame ProRAW.
+    var singleFrame = false
 
     init(source: FrameSource, metadata: [String: Any], flashFired: Bool = false, location: CLLocation? = nil, depth: CIImage? = nil) {
         self.source = source
