@@ -7,10 +7,18 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AA0000000000000000000031 /* LatentWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000030 /* LatentWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		AA0000000000000000000011 /* LatentControls.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000010 /* LatentControls.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		AA0000000000000000000032 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA000000000000000000000A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AA0000000000000000000033;
+			remoteInfo = LatentWatch;
+		};
 		AA0000000000000000000012 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = AA000000000000000000000A /* Project object */;
@@ -28,6 +36,17 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
+		AA0000000000000000000038 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				AA0000000000000000000031 /* LatentWatch.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		AA0000000000000000000014 /* Embed Foundation Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -42,12 +61,18 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		AA0000000000000000000030 /* LatentWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LatentWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000000000000000000001 /* Latent.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Latent.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000000000000000000010 /* LatentControls.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = LatentControls.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000000000000000000020 /* LatentTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LatentTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		AA0000000000000000000037 /* LatentWatch */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = LatentWatch;
+			sourceTree = "<group>";
+		};
 		AA0000000000000000000002 /* Latent */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = Latent;
@@ -71,6 +96,13 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		AA0000000000000000000035 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		AA0000000000000000000003 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -102,6 +134,7 @@
 				AA0000000000000000000015 /* LatentControls */,
 				AA0000000000000000000016 /* Shared */,
 				AA0000000000000000000022 /* LatentTests */,
+				AA0000000000000000000037 /* LatentWatch */,
 				AA0000000000000000000005 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -112,6 +145,7 @@
 				AA0000000000000000000001 /* Latent.app */,
 				AA0000000000000000000010 /* LatentControls.appex */,
 				AA0000000000000000000020 /* LatentTests.xctest */,
+				AA0000000000000000000030 /* LatentWatch.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -127,11 +161,13 @@
 				AA0000000000000000000003 /* Frameworks */,
 				AA0000000000000000000009 /* Resources */,
 				AA0000000000000000000014 /* Embed Foundation Extensions */,
+				AA0000000000000000000038 /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				AA0000000000000000000018 /* PBXTargetDependency */,
+				AA0000000000000000000039 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				AA0000000000000000000002 /* Latent */,
@@ -190,6 +226,28 @@
 			productReference = AA0000000000000000000020 /* LatentTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		AA0000000000000000000033 /* LatentWatch */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA000000000000000000003A /* Build configuration list for PBXNativeTarget "LatentWatch" */;
+			buildPhases = (
+				AA0000000000000000000034 /* Sources */,
+				AA0000000000000000000035 /* Frameworks */,
+				AA0000000000000000000036 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				AA0000000000000000000037 /* LatentWatch */,
+			);
+			name = LatentWatch;
+			packageProductDependencies = (
+			);
+			productName = LatentWatch;
+			productReference = AA0000000000000000000030 /* LatentWatch.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -210,6 +268,9 @@
 						CreatedOnToolsVersion = 16.0;
 						TestTargetID = AA0000000000000000000006;
 					};
+					AA0000000000000000000033 = {
+						CreatedOnToolsVersion = 16.0;
+					};
 				};
 			};
 			buildConfigurationList = AA000000000000000000000B /* Build configuration list for PBXProject "Latent" */;
@@ -229,6 +290,7 @@
 				AA0000000000000000000006 /* Latent */,
 				AA0000000000000000000013 /* LatentControls */,
 				AA0000000000000000000024 /* LatentTests */,
+				AA0000000000000000000033 /* LatentWatch */,
 			);
 		};
 /* End PBXProject section */
@@ -249,6 +311,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		AA0000000000000000000027 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA0000000000000000000036 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -279,6 +348,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AA0000000000000000000034 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -291,6 +367,11 @@
 			isa = PBXTargetDependency;
 			target = AA0000000000000000000006 /* Latent */;
 			targetProxy = AA0000000000000000000021 /* PBXContainerItemProxy */;
+		};
+		AA0000000000000000000039 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AA0000000000000000000033 /* LatentWatch */;
+			targetProxy = AA0000000000000000000032 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -496,6 +577,58 @@
 			};
 			name = Release;
 		};
+		AA000000000000000000003B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = X3PZX4A3BL;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Latent;
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = dev.latentcam.app11da0f;
+				INFOPLIST_KEY_WKRunsIndependentlyOfCompanionApp = NO;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.latentcam.app11da0f.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Debug;
+		};
+		AA000000000000000000003C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = X3PZX4A3BL;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Latent;
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = dev.latentcam.app11da0f;
+				INFOPLIST_KEY_WKRunsIndependentlyOfCompanionApp = NO;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.latentcam.app11da0f.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -531,6 +664,15 @@
 			buildConfigurations = (
 				AA0000000000000000000029 /* Debug */,
 				AA000000000000000000002A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA000000000000000000003A /* Build configuration list for PBXNativeTarget "LatentWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA000000000000000000003B /* Debug */,
+				AA000000000000000000003C /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -69,6 +69,7 @@ final class AppModel {
         camera.setSlowShutter(prefs.shutter)
         await camera.start()
         camera.startMetering()
+        RemoteShutter.shared.start(self)
         updateSensors()
         photosSync.refresh()
         orientation.start()
@@ -98,15 +99,17 @@ final class AppModel {
     @ObservationIgnored private var countdownTask: Task<Void, Never>?
 
     /// The shutter: starts the self-timer when one is set (pressing again cancels it), otherwise shoots.
-    func capture() {
+    /// `timer` overrides the self-timer for this press (the watch remote sends its own).
+    func capture(timer: Int? = nil) {
+        let seconds = timer ?? timerSeconds
         if countdownTask != nil {
             countdownTask?.cancel(); countdownTask = nil; countdown = nil
             Feedback.selection()
             return
         }
-        guard timerSeconds > 0 else { fire(); return }
+        guard seconds > 0 else { fire(); return }
         countdownTask = Task {
-            for left in stride(from: timerSeconds, through: 1, by: -1) {
+            for left in stride(from: seconds, through: 1, by: -1) {
                 countdown = left
                 Feedback.selection()
                 try? await Task.sleep(for: .seconds(1))

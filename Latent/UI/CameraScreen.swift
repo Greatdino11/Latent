@@ -75,7 +75,12 @@ struct CameraScreen: View {
             #endif
         }
         .onChange(of: scenePhase) { _, phase in model.isActive = phase == .active }
-        .onChange(of: model.roll.items, initial: true) { _, items in WidgetPublisher.shared.publish(items) }
+        .onChange(of: model.roll.items, initial: true) { _, items in
+            WidgetPublisher.shared.publish(items)
+            RemoteShutter.shared.publish()
+        }
+        .onChange(of: model.isActive) { RemoteShutter.shared.publish() }
+        .onChange(of: model.prefs.selectedStockID) { RemoteShutter.shared.publish() }
         .onChange(of: showRoll || showSettings) { _, covered in model.viewfinderCovered = covered }
         .alert("Something went wrong", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
             Button("OK", role: .cancel) {}
