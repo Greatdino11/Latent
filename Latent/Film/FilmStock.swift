@@ -173,13 +173,14 @@ extension FilmStock {
                           blurb: "Moody and deep. Teal-green shadows, a warm sun breaking through.")
         s.exposureBias = -0.25
         s.contrast = RGB(0.74, 0.72, 0.66); s.balance = RGB(0.10, 0.04, -0.06)
-        s.black = RGB(0.040, 0.058, 0.060); s.white = RGB(0.96, 0.94, 0.86)
+        s.black = RGB(0.050, 0.060, 0.062); s.white = RGB(0.96, 0.94, 0.86)
+        s.toe = 0.9                                   // keeps a little detail in deep shade instead of teal-black
         s.saturation = 0.84; s.temperature = 0.1
         s.hue(.yellow, -6, sat: 1.0)
         s.hue(.green, -12, sat: 0.78)
         s.hue(.blue, -12, sat: 0.78)
         s.hue(.magenta, 0, sat: 0.9)
-        s.shadowTint = RGB(-0.012, 0.006, 0.01)
+        s.shadowTint = RGB(-0.006, 0.003, 0.006)
         s.grain = 0.6; s.halation = 0.65; s.bloom = 0.35; s.softness = 0.35; s.aberration = 0.4; s.flare = 0.9
         s.vignette = 0.35
         return s
@@ -206,9 +207,12 @@ extension FilmStock {
         var s = FilmStock(id: "night", name: "Night", iso: 800,
                           blurb: "After dark. Teal shadows, warm lamps, red halos and colour fringing.")
         s.exposureBias = 0.35
-        s.contrast = RGB(0.72, 0.70, 0.62); s.balance = RGB(0.2, 0.04, -0.06)
-        s.black = RGB(0.045, 0.065, 0.075); s.white = RGB(0.99, 0.945, 0.86)
-        s.saturation = 0.9; s.temperature = -0.25
+        // Tungsten film: warm room light prints near neutral and daylight goes cool. The warmth lives in the
+        // highlights (lamps, windows), the teal in the shadows, rather than a cast over everything.
+        s.contrast = RGB(0.72, 0.70, 0.66); s.balance = RGB(-0.02, 0.02, 0.06)
+        s.black = RGB(0.045, 0.065, 0.075); s.white = RGB(0.97, 0.955, 0.93)
+        s.saturation = 0.9; s.temperature = -0.45
+        s.highlightTint = RGB(0.035, 0.01, -0.03); s.shadowTint = RGB(-0.01, 0.002, 0.012)
         s.hue(.red, 0, sat: 1.15)
         s.hue(.yellow, -8, sat: 1.05)
         s.hue(.green, 20, sat: 0.7)

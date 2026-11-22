@@ -209,6 +209,16 @@ enum FilmPipeline {
 
     /// Finds the brightest compact light source; if there is one, adds veiling glare and aperture ghosts
     /// along the line from the source through the centre of the frame.
+    /// How strongly the brightest spot throws ghosts. `peak` is the blurred hot-spot mask value (scene luma ÷ 2.5 − 1
+    /// for RAW). In a RAW the sun clips near the top of its range (≈ 20–32), while sunlit whites, bright bark and
+    /// gaps of sky through branches sit around 3–10: those must not throw ghosts, or a lone green disc lands in the
+    /// middle of a frame with no light source in it. Processed photos have no headroom, so any clipped spot counts.
+    static func flareIntensity(peak: Float, sceneReferred: Bool) -> Double {
+        guard sceneReferred else { return Double(min(1, peak / 0.03)) }
+        let luma = (Double(peak) + 1) * 2.5
+        return LUT.smoothstep(9, 16, luma)
+    }
+
     static func flare(_ img: CIImage, mask: CIImage, amount: Double, sceneReferred: Bool, stock: FilmStock, extent: CGRect, short: CGFloat, context: CIContext) -> CIImage {
         // Blur then shrink the hot-spot mask so the biggest bright blob wins, then find its peak.
         let w = 64, h = max(8, Int((CGFloat(w) * extent.height / extent.width).rounded()))
@@ -228,7 +238,8 @@ enum FilmPipeline {
         // Bitmap rows run top to bottom; Core Image's y axis runs bottom to top.
         let src = CGPoint(x: extent.minX + (CGFloat(pi) + 0.5) / CGFloat(w) * extent.width,
                           y: extent.maxY - (CGFloat(pj) + 0.5) / CGFloat(h) * extent.height)
-        let intensity = Double(min(1, peak / (sceneReferred ? 0.6 : 0.03)))
+        let intensity = flareIntensity(peak: peak, sceneReferred: sceneReferred)
+        guard intensity > 0.01 else { return img }
         // A pin-point glint (a reflection) throws far weaker ghosts than the sun: scale by the source's size.
         let size = min(1, Double(lit) / 8)
         let strength = intensity * size * stock.flare * amount * (1 - coverage * 8)

@@ -472,3 +472,21 @@ final class RollTrashTests: XCTestCase {
         XCTAssertTrue((try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("RollTrash").path)).isEmpty)
     }
 }
+
+final class FlareTests: XCTestCase {
+    /// In a RAW, only sun-level sources throw ghosts: a bright patch (sky through branches, sunlit bark) doesn't.
+    func testOnlyTheSunThrowsGhosts() {
+        func peak(forLuma l: Double) -> Float { Float(l / 2.5 - 1) }   // the hot-spot mask's scale for RAW
+        XCTAssertEqual(FilmPipeline.flareIntensity(peak: peak(forLuma: 5), sceneReferred: true), 0)
+        XCTAssertEqual(FilmPipeline.flareIntensity(peak: 6, sceneReferred: true), 1, accuracy: 1e-9)   // clipped sun
+        let mid = FilmPipeline.flareIntensity(peak: peak(forLuma: 12.5), sceneReferred: true)
+        XCTAssertGreaterThan(mid, 0); XCTAssertLessThan(mid, 1)
+        XCTAssertEqual(FilmPipeline.flareIntensity(peak: 0.03, sceneReferred: false), 1, accuracy: 1e-6)
+    }
+
+    /// Night is tungsten-balanced: mid grey prints neutral-to-cool, not warm.
+    func testNightIsNotWarmOverall() {
+        let o = LUT.transform(RGB(0.18, 0.18, 0.18), FilmStock.night.forRAW())
+        XCTAssertLessThanOrEqual(o.x, o.z + 0.005)
+    }
+}
