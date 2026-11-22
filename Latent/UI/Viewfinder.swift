@@ -191,11 +191,11 @@ struct MatchNeedle: View {
     let simulated: Bool
 
     var body: some View {
-        let off = Double(simulated ? 0 : meter.offset)
+        let off = simulated || !meter.offset.isFinite ? 0 : Double(meter.offset)
         let clamped = min(2, max(-2, off))
         let good = abs(off) < 0.5
         VStack(alignment: .trailing, spacing: 4) {
-            Text("\(Self.shutter(meter.shutter))  ISO \(Int(meter.iso.rounded()))")
+            Text("\(Self.shutter(meter.shutter))  ISO \(meter.iso.isFinite ? String(Int(meter.iso.rounded())) : "—")")
                 .font(Theme.mono(10, .bold)).foregroundStyle(Theme.amber)
             Canvas { ctx, size in
                 let mid = size.width / 2, step = size.width / 4.4
@@ -219,6 +219,9 @@ struct MatchNeedle: View {
     }
 
     static func shutter(_ s: Double) -> String {
+        // While the camera is paused (or just restarting) the exposure reads as not-a-number: show a dash, never
+        // convert it (Int(.nan) crashes).
+        guard s.isFinite, s > 0 else { return "—" }
         if s >= 0.95 { return String(format: "%.0f\"", s.rounded()) }
         return "1/\(Int((1 / max(s, 1e-4)).rounded()))"
     }

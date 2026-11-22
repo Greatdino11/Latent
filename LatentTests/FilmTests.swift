@@ -575,3 +575,14 @@ final class SocialPrintTests: XCTestCase {
         }
     }
 }
+
+final class MeterTests: XCTestCase {
+    /// A paused camera reports NaN exposure: the meter shows a dash instead of crashing.
+    func testMeterSurvivesInvalidReadings() {
+        XCTAssertEqual(MatchNeedle.shutter(.nan), "—")
+        XCTAssertEqual(MatchNeedle.shutter(.infinity), "—")
+        XCTAssertEqual(MatchNeedle.shutter(0), "—")
+        XCTAssertEqual(MatchNeedle.shutter(1.0 / 125), "1/125")
+        XCTAssertEqual(MatchNeedle.shutter(2), "2\"")
+    }
+}

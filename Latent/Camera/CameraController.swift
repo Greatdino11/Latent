@@ -108,6 +108,8 @@ final class CameraController: NSObject {
             MainActor.assumeIsolated {
                 guard let self, let d = self.device else { return }
                 let m = Meter(shutter: d.exposureDuration.seconds, iso: d.iso, offset: d.exposureTargetOffset)
+                // Paused or restarting cameras report NaN: keep the last good reading.
+                guard m.shutter.isFinite, m.shutter > 0, m.iso.isFinite, m.offset.isFinite else { return }
                 // Only publish real changes, so the viewfinder doesn't redraw for nothing.
                 if abs(m.offset - self.meter.offset) > 0.05 || abs(m.shutter - self.meter.shutter) / max(self.meter.shutter, 1e-6) > 0.05
                     || abs(m.iso - self.meter.iso) > 2 { self.meter = m }
@@ -274,10 +276,16 @@ final class CameraController: NSObject {
         guard let d = device, d.isExposureModeSupported(.custom), (try? d.lockForConfiguration()) != nil else { done(); return }
         let duration = CMTime(seconds: min(seconds, d.activeFormat.maxExposureDuration.seconds), preferredTimescale: 1_000_000)
         if duration > d.activeVideoMaxFrameDuration { d.activeVideoMaxFrameDuration = duration }
-        let product = d.exposureDuration.seconds * Double(d.iso)
-        let iso = Float(product / duration.seconds).clamped(d.activeFormat.minISO, d.activeFormat.maxISO)
+        let iso = Float(Self.meteredProduct(d) / duration.seconds).clamped(d.activeFormat.minISO, d.activeFormat.maxISO)
         d.setExposureModeCustom(duration: duration, iso: iso) { _ in done() }
         d.unlockForConfiguration()
+    }
+
+    /// Exposure time × ISO the meter has settled on (what any shutter/ISO pair must match). A camera that's just
+    /// restarted can report NaN; fall back to a typical indoor reading rather than pass NaN on (which crashes).
+    private static func meteredProduct(_ d: AVCaptureDevice) -> Double {
+        let p = d.exposureDuration.seconds * Double(d.iso)
+        return p.isFinite && p > 0 ? p : 1.0 / 60 * 400
     }
 
     /// Camera queue. Back to automatic exposure and normal frame rates after a manual shutter.
@@ -313,7 +321,7 @@ final class CameraController: NSObject {
                 }
                 // Each frame as long as the sensor and frame rate allow at base ISO (long, clean frames make
                 // unbroken light trails at night); short frames at a steady 30 fps in bright light.
-                let product = d.exposureDuration.seconds * Double(d.iso)
+                let product = Self.meteredProduct(d)
                 let minFps = Double(d.activeFormat.videoSupportedFrameRateRanges.map(\.minFrameRate).min() ?? 1)
                 let longest = min(d.activeFormat.maxExposureDuration.seconds, 1 / max(minFps, 1), 0.5)
                 let exposure = (product / Double(d.activeFormat.minISO)).clamped(d.activeFormat.minExposureDuration.seconds, longest)
