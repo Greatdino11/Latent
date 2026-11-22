@@ -91,6 +91,8 @@ private struct RollGrid: View {
     @State private var confirmDelete = false
     @State private var sheetURL: URL?
     @State private var doublePair: [RollItem]?
+    @State private var naming: String?
+    @State private var nameText = ""
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 2), count: 3)
     private var chosenItems: [RollItem] { model.roll.items.filter { chosen.contains($0.id) } }
@@ -113,21 +115,13 @@ private struct RollGrid: View {
             .frame(height: 44)
 
             ScrollView {
-                LazyVGrid(columns: columns, spacing: 2) {
-                    ForEach(model.roll.items) { item in
-                        RollCell(item: item, mark: selecting ? chosen.contains(item.id) : nil)
-                            .onTapGesture {
-                                if selecting {
-                                    if chosen.contains(item.id) { chosen.remove(item.id) } else { chosen.insert(item.id) }
-                                    Feedback.selection()
-                                } else {
-                                    open(item.id)
-                                }
-                            }
-                            .onLongPressGesture {
-                                guard !selecting else { return }
-                                selecting = true; chosen = [item.id]; Feedback.selection()
-                            }
+                LazyVGrid(columns: columns, spacing: 2, pinnedViews: [.sectionHeaders]) {
+                    ForEach(RollDay.group(model.roll.items)) { day in
+                        Section {
+                            ForEach(day.items) { item in cell(item) }
+                        } header: {
+                            dayHeader(day)
+                        }
                     }
                 }
             }
@@ -136,6 +130,13 @@ private struct RollGrid: View {
                     ContentUnavailableView("No frames yet", systemImage: "film",
                                            description: Text("Take a photo, or import one with the button below."))
                 }
+            }
+            .alert("Name this day", isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
+                TextField("e.g. Park walk", text: $nameText)
+                Button("Save") {
+                    if let key = naming { model.prefs.dayNames[key] = nameText.trimmingCharacters(in: .whitespaces).isEmpty ? nil : nameText }
+                }
+                Button("Cancel", role: .cancel) {}
             }
 
             if selecting { actionBar }
@@ -254,12 +255,65 @@ private struct RollGrid: View {
         .background(RoundedRectangle(cornerRadius: 10).fill(Theme.panel))
     }
 
-    private func makeContactSheet() {
-        let items = chosenItems
+    private func cell(_ item: RollItem) -> some View {
+        RollCell(item: item, mark: selecting ? chosen.contains(item.id) : nil)
+            .onTapGesture {
+                if selecting {
+                    if chosen.contains(item.id) { chosen.remove(item.id) } else { chosen.insert(item.id) }
+                    Feedback.selection()
+                } else {
+                    open(item.id)
+                }
+            }
+            .onLongPressGesture {
+                guard !selecting else { return }
+                selecting = true; chosen = [item.id]; Feedback.selection()
+            }
+    }
+
+    /// A day on the roll: its name (tap to set one) or date, how many frames, and a contact sheet of just that day.
+    private func dayHeader(_ day: RollDay) -> some View {
+        let name = model.prefs.dayNames[day.key]
+        let ids = Set(day.items.map(\.id))
+        return HStack(alignment: .center, spacing: 10) {
+            Button {
+                nameText = name ?? ""; naming = day.key
+            } label: {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(name?.uppercased() ?? day.title).font(Theme.mono(12, .bold)).foregroundStyle(Theme.label).lineLimit(1)
+                    Text((name != nil ? day.title + " · " : "") + "\(day.items.count) frame\(day.items.count == 1 ? "" : "s")")
+                        .font(Theme.mono(9)).foregroundStyle(Theme.dim)
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Name this day")
+            Spacer()
+            if selecting {
+                Button(ids.isSubset(of: chosen) ? "NONE" : "ALL") {
+                    if ids.isSubset(of: chosen) { chosen.subtract(ids) } else { chosen.formUnion(ids) }
+                    Feedback.selection()
+                }
+                .font(Theme.mono(11, .bold)).foregroundStyle(Theme.amber)
+            } else {
+                Button { makeContactSheet(day.items, name: name) } label: {
+                    Image(systemName: "squares.below.rectangle").font(.system(size: 15, weight: .medium)).foregroundStyle(Theme.amber)
+                        .frame(width: 34, height: 30)
+                }
+                .buttonStyle(.plain).disabled(busy)
+                .accessibilityLabel("Contact sheet of this day")
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 8)
+        .background(Theme.body.opacity(0.96))
+    }
+
+    private func makeContactSheet() { makeContactSheet(chosenItems, name: nil) }
+
+    private func makeContactSheet(_ items: [RollItem], name: String?) {
         busy = true
         Task {
             do {
-                sheetURL = try await model.contactSheet(items) { i, n in status = "Printing contact sheet \(i) of \(n)…" }
+                sheetURL = try await model.contactSheet(items, name: name) { i, n in status = "Printing contact sheet \(i) of \(n)…" }
                 status = items.count > ContactSheet.maxFrames ? "Contact sheet of the first \(ContactSheet.maxFrames) frames" : nil
             } catch { status = error.localizedDescription }
             busy = false
@@ -942,5 +996,31 @@ private struct ContactSheetView: View {
         }
         .background(Theme.body.ignoresSafeArea())
         .task { image = RollStore.downsample(url, maxPixel: 4000) }
+    }
+}
+
+/// The roll split into days, newest first.
+struct RollDay: Identifiable {
+    let key: String          // "2026-11-21"
+    let title: String        // "SAT 21 NOV"
+    let items: [RollItem]
+    var id: String { key }
+
+    static func group(_ items: [RollItem]) -> [RollDay] {
+        let keyFormat = DateFormatter(); keyFormat.dateFormat = "yyyy-MM-dd"
+        let titleFormat = DateFormatter(); titleFormat.dateFormat = "EEE d MMM"
+        let thisYear = Calendar.current.component(.year, from: Date())
+        var order: [String] = [], groups: [String: [RollItem]] = [:]
+        for item in items {
+            let k = keyFormat.string(from: item.date)
+            if groups[k] == nil { order.append(k) }
+            groups[k, default: []].append(item)
+        }
+        return order.map { k in
+            let first = groups[k]![0].date
+            var title = titleFormat.string(from: first).uppercased()
+            if Calendar.current.component(.year, from: first) != thisYear { title += " \(Calendar.current.component(.year, from: first))" }
+            return RollDay(key: k, title: title, items: groups[k]!)
+        }
     }
 }

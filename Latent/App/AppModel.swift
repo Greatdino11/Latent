@@ -310,7 +310,7 @@ final class AppModel {
     }
 
     /// A contact sheet of frames in shooting order (up to 36), written to a temporary JPEG.
-    func contactSheet(_ items: [RollItem], progress: (Int, Int) -> Void) async throws -> URL {
+    func contactSheet(_ items: [RollItem], name: String? = nil, progress: (Int, Int) -> Void) async throws -> URL {
         let ordered = Array(items.sorted { $0.date < $1.date }.prefix(ContactSheet.maxFrames))
         var frames: [ContactSheet.Frame] = []
         for (i, item) in ordered.enumerated() {
@@ -326,7 +326,7 @@ final class AppModel {
         }
         let f = DateFormatter(); f.dateFormat = "d MMM yyyy"
         let days = Set(ordered.map { f.string(from: $0.date) })
-        let title = "LATENT   " + (days.count == 1 ? days.first! : "\(f.string(from: ordered.first!.date)) – \(f.string(from: ordered.last!.date))")
+        let title = "LATENT   " + (name.map { $0.uppercased() + "   " } ?? "") + (days.count == 1 ? days.first! : "\(f.string(from: ordered.first!.date)) – \(f.string(from: ordered.last!.date))")
             + "   \(frames.count) FRAMES"
         let seed = UInt64(abs(ordered.first!.date.timeIntervalSince1970))
         let jpeg: Data = try await Task.detached(priority: .userInitiated) {

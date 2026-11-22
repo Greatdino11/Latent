@@ -35,6 +35,8 @@ final class Preferences {
     var showGrid: Bool { didSet { d.set(showGrid, forKey: "grid") } }
     var showLevel: Bool { didSet { d.set(showLevel, forKey: "level") } }
     var showMeter: Bool { didSet { d.set(showMeter, forKey: "meter") } }
+    /// Names given to days on the roll ("2026-11-20" → "Park walk").
+    var dayNames: [String: String] { didSet { d.set(dayNames, forKey: "dayNames") } }
     var stockOrder: [String] { didSet { d.set(stockOrder, forKey: "stockOrder") } }
     var hiddenStocks: Set<String> { didSet { d.set(Array(hiddenStocks), forKey: "hidden") } }
     var randomPool: Set<String> { didSet { d.set(Array(randomPool), forKey: "randomPool") } }
@@ -87,6 +89,7 @@ final class Preferences {
         showGrid = d.bool(forKey: "grid")
         showLevel = d.bool(forKey: "level")
         showMeter = d.bool(forKey: "meter")
+        dayNames = d.dictionary(forKey: "dayNames") as? [String: String] ?? [:]
         let customs = d.data(forKey: "customStocks").flatMap { try? JSONDecoder().decode([CustomStock].self, from: $0) } ?? []
         customStocks = customs
         StockRegistry.set(customs)

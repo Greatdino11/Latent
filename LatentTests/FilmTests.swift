@@ -545,3 +545,18 @@ final class LabLookTests: XCTestCase {
         XCTAssertGreaterThan(spread(.frontier), spread(.noritsu))
     }
 }
+
+final class RollDayTests: XCTestCase {
+    func testGroupsByDayNewestFirst() {
+        let cal = Calendar.current
+        let d1 = cal.date(from: DateComponents(year: 2026, month: 11, day: 21, hour: 18))!
+        let d2 = cal.date(from: DateComponents(year: 2026, month: 11, day: 21, hour: 9))!
+        let d3 = cal.date(from: DateComponents(year: 2026, month: 11, day: 20, hour: 17))!
+        let folder = URL(fileURLWithPath: "/tmp")
+        let items = [d1, d2, d3].map { RollItem(base: String(Int64($0.timeIntervalSince1970 * 1000)), stockID: "honey", date: $0, folder: folder) }
+        let days = RollDay.group(items)
+        XCTAssertEqual(days.map(\.key), ["2026-11-21", "2026-11-20"])
+        XCTAssertEqual(days[0].items.count, 2)
+        XCTAssertEqual(days[1].title, "FRI 20 NOV")
+    }
+}
