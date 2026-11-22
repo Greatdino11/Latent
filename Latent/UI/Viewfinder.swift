@@ -27,6 +27,11 @@ struct Viewfinder: View {
                                 .position(x: frame.midX, y: frame.minY + 18)
                                 .allowsHitTesting(false)
                         }
+                        if prefs.showMeter {
+                            MatchNeedle(meter: model.camera.meter, manual: prefs.shutter > 0, simulated: model.camera.isSimulated)
+                                .position(x: frame.maxX - 62, y: frame.minY + 24)
+                                .allowsHitTesting(false)
+                        }
                         if let p = model.exposing {
                             // A long exposure is running: keep still.
                             VStack(spacing: 10) {
@@ -175,5 +180,46 @@ private struct FocusReticle: View {
             .frame(width: 64, height: 64)
             .scaleEffect(scale)
             .onAppear { withAnimation(.spring(duration: 0.3)) { scale = 1 } }
+    }
+}
+
+/// A match-needle light meter, like an old SLR's: the shutter and ISO in use, and a needle for how far the exposure
+/// is from what the meter reads as right. With a manual shutter the needle shows over or under exposure.
+struct MatchNeedle: View {
+    let meter: CameraController.Meter
+    let manual: Bool
+    let simulated: Bool
+
+    var body: some View {
+        let off = Double(simulated ? 0 : meter.offset)
+        let clamped = min(2, max(-2, off))
+        let good = abs(off) < 0.5
+        VStack(alignment: .trailing, spacing: 4) {
+            Text("\(Self.shutter(meter.shutter))  ISO \(Int(meter.iso.rounded()))")
+                .font(Theme.mono(10, .bold)).foregroundStyle(Theme.amber)
+            Canvas { ctx, size in
+                let mid = size.width / 2, step = size.width / 4.4
+                for i in -2...2 {
+                    let x = mid + CGFloat(i) * step
+                    var p = Path(); p.move(to: CGPoint(x: x, y: i == 0 ? 0 : 3)); p.addLine(to: CGPoint(x: x, y: 8))
+                    ctx.stroke(p, with: .color(.white.opacity(i == 0 ? 0.9 : 0.45)), lineWidth: i == 0 ? 1.5 : 1)
+                }
+                ctx.draw(Text("−").font(Theme.mono(9, .bold)).foregroundColor(.white.opacity(0.6)), at: CGPoint(x: 4, y: 14))
+                ctx.draw(Text("+").font(Theme.mono(9, .bold)).foregroundColor(.white.opacity(0.6)), at: CGPoint(x: size.width - 4, y: 14))
+                let nx = mid + CGFloat(clamped) * step
+                var n = Path(); n.move(to: CGPoint(x: nx - 4, y: 18)); n.addLine(to: CGPoint(x: nx + 4, y: 18)); n.addLine(to: CGPoint(x: nx, y: 10))
+                ctx.fill(n, with: .color(good ? Theme.amber : Color(red: 1, green: 0.35, blue: 0.25)))
+            }
+            .frame(width: 96, height: 20)
+        }
+        .padding(.horizontal, 8).padding(.vertical, 5)
+        .background(.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+        .animation(.easeOut(duration: 0.25), value: meter)
+        .accessibilityLabel(manual && !good ? (off > 0 ? "Overexposed" : "Underexposed") : "Exposure \(Self.shutter(meter.shutter))")
+    }
+
+    static func shutter(_ s: Double) -> String {
+        if s >= 0.95 { return String(format: "%.0f\"", s.rounded()) }
+        return "1/\(Int((1 / max(s, 1e-4)).rounded()))"
     }
 }

@@ -24,6 +24,7 @@ struct SettingsView: View {
                     }
                     Toggle("Grid", isOn: $prefs.showGrid)
                     Toggle("Level", isOn: $prefs.showLevel)
+                    Toggle("Light meter", isOn: $prefs.showMeter)
                     Toggle("Full-screen reveal", isOn: $prefs.bigReveal)
                     Toggle("Haptics", isOn: $prefs.haptics)
                     Toggle("Film advance sound", isOn: $prefs.advanceSound)

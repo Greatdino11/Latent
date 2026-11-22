@@ -37,6 +37,12 @@ final class CameraController: NSObject {
     /// Focus and exposure are locked (long-press in the viewfinder); a tap unlocks.
     private(set) var aeafLocked = false
 
+    /// What the light meter shows: the camera's current shutter and ISO, and how far the exposure is from what it
+    /// meters as right (in stops; + is too bright).
+    struct Meter: Equatable { var shutter: Double; var iso: Float; var offset: Float }
+    private(set) var meter = Meter(shutter: 1.0 / 125, iso: 100, offset: 0)
+    @ObservationIgnored private var meterTimer: Timer?
+
     var isSimulated: Bool { status == .simulated }
     var isReady: Bool { status == .running || status == .simulated }
 
@@ -93,6 +99,20 @@ final class CameraController: NSObject {
         apply(setup)
         status = setup.ok ? .running : .failed
         #endif
+    }
+
+    /// Reads the exposure a few times a second for the viewfinder's meter.
+    @MainActor func startMetering() {
+        guard meterTimer == nil else { return }
+        meterTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let d = self.device else { return }
+                let m = Meter(shutter: d.exposureDuration.seconds, iso: d.iso, offset: d.exposureTargetOffset)
+                // Only publish real changes, so the viewfinder doesn't redraw for nothing.
+                if abs(m.offset - self.meter.offset) > 0.05 || abs(m.shutter - self.meter.shutter) / max(self.meter.shutter, 1e-6) > 0.05
+                    || abs(m.iso - self.meter.iso) > 2 { self.meter = m }
+            }
+        }
     }
 
     @MainActor private func apply(_ setup: Setup) {

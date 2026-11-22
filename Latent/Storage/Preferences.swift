@@ -30,6 +30,7 @@ final class Preferences {
     var saveOriginal: Bool { didSet { d.set(saveOriginal, forKey: "saveOriginal") } }
     var showGrid: Bool { didSet { d.set(showGrid, forKey: "grid") } }
     var showLevel: Bool { didSet { d.set(showLevel, forKey: "level") } }
+    var showMeter: Bool { didSet { d.set(showMeter, forKey: "meter") } }
     var stockOrder: [String] { didSet { d.set(stockOrder, forKey: "stockOrder") } }
     var hiddenStocks: Set<String> { didSet { d.set(Array(hiddenStocks), forKey: "hidden") } }
     var randomPool: Set<String> { didSet { d.set(Array(randomPool), forKey: "randomPool") } }
@@ -54,7 +55,7 @@ final class Preferences {
         d.register(defaults: [
             "selectedStock": FilmStock.randomID, "aspect": AspectRatio.r3x2.rawValue, "grain": 1.0,
             "halation": true, "flareAmount": 0.6, "dateStamp": false, "frame": FrameStyle.none.rawValue, "lightLeak": 0.0, "dust": false, "hires": false, "zero": false, "shutter": 0.0, "trails": true, "portraitLens": PortraitLens.classic.rawValue, "blurAmount": 0.6,
-            "saveToPhotos": true, "saveOriginal": false, "grid": false, "level": true,
+            "saveToPhotos": true, "saveOriginal": false, "grid": false, "level": true, "meter": true,
             "saveLocation": false, "haptics": true, "advanceSound": false, "bigReveal": false,
         ])
         selectedStockID = d.string(forKey: "selectedStock") ?? FilmStock.randomID
@@ -79,6 +80,7 @@ final class Preferences {
         saveOriginal = d.bool(forKey: "saveOriginal")
         showGrid = d.bool(forKey: "grid")
         showLevel = d.bool(forKey: "level")
+        showMeter = d.bool(forKey: "meter")
         let customs = d.data(forKey: "customStocks").flatMap { try? JSONDecoder().decode([CustomStock].self, from: $0) } ?? []
         customStocks = customs
         StockRegistry.set(customs)

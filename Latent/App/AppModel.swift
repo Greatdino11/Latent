@@ -68,6 +68,7 @@ final class AppModel {
         camera.setZero(prefs.zeroProcess)
         camera.setSlowShutter(prefs.shutter)
         await camera.start()
+        camera.startMetering()
         updateSensors()
         photosSync.refresh()
         orientation.start()
