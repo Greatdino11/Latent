@@ -88,6 +88,13 @@ struct LookDrawer: View {
                         .disabled(isDefault)
                 }
 
+                group("MODE", note: prefs.panoMode ? "PANO: take 2–5 shots turning on the spot, each overlapping the last by about a third, then tap DONE. Exposure locks after the first shot." : nil) {
+                    chips {
+                        LookChip(title: "PHOTO", on: !prefs.panoMode) { setPano(false) }
+                        LookChip(title: "PANO", on: prefs.panoMode) { setPano(true) }
+                    }
+                }
+
                 group("FILM") {
                     if let stock {
                         LookSlider(title: "STRENGTH", value: Binding(get: { prefs.strength(for: stock) },
@@ -200,6 +207,13 @@ struct LookDrawer: View {
         model.camera.setHighResolution(on)
     }
 
+    private func setPano(_ on: Bool) {
+        guard model.prefs.panoMode != on else { return }
+        if on, model.portrait { model.togglePortrait() }          // a panorama is a plain capture
+        if !on { model.cancelPanorama() }
+        model.prefs.panoMode = on
+    }
+
     /// 12MP, 48MP and ZERO are one choice: ZERO (single-frame Bayer RAW) is always 12MP.
     private func setCapture(highRes: Bool, zero: Bool) {
         if model.prefs.zeroProcess != zero {
@@ -214,6 +228,7 @@ struct LookDrawer: View {
     private func reset() {
         let p = model.prefs
         p.grainAmount = 1; p.flareAmount = 0.6; p.halation = true; p.dust = false; p.dateStamp = false
+        if p.panoMode { model.cancelPanorama(); p.panoMode = false }
         p.lightLeak = 0; p.frameStyle = .none; p.blurAmount = 0.6; p.expired = 0; p.scanner = nil
         if !p.isRandom { p.stockStrength[p.selectedStockID] = nil }
         if p.highResolution || p.zeroProcess { setCapture(highRes: false, zero: false) }
@@ -229,6 +244,7 @@ enum ActiveLook {
     static func items(_ model: AppModel) -> [String] {
         let p = model.prefs
         var out: [String] = []
+        if p.panoMode { out.append("PANO") }
         if model.portrait { out.append("PORTRAIT · \(p.portraitLens.label.uppercased())") }
         if !p.isRandom, let s = FilmStock.with(id: p.selectedStockID), p.strength(for: s) < 0.995 {
             out.append("STRENGTH \(LookLabels.percent(p.strength(for: s)))")

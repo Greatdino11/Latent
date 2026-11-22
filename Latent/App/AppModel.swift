@@ -129,6 +129,7 @@ final class AppModel {
         }
         shutterTick += 1
         Feedback.shutter()
+        if prefs.panoMode { panoShot(); return }
         let stock = prefs.resolveStock()
         Task { await shoot(stock: stock, saveToPhotos: prefs.saveToPhotos) }
     }
@@ -178,23 +179,99 @@ final class AppModel {
             let started = Date()
             let result = try await Darkroom.shared.develop(frame, stock: stock, options: options)
             lastDevelopSeconds = Date().timeIntervalSince(started)
+            await keep(result, stock: stock, original: saveOriginal ? frame.originalData : nil, location: fix, saveToPhotos: saveToPhotos)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Puts a developed frame on the roll (and in Photos).
+    private func keep(_ result: DevelopResult, stock: FilmStock, original: Data?, location fix: CLLocation?, saveToPhotos: Bool) async {
+        do {
             let item = try roll.add(result, stock: stock)
             lastDeveloped = item
             Feedback.advance()
             if prefs.bigReveal { reveal = item }
-            if saveToPhotos {
-                let recipe = (try? JSONEncoder().encode(result.options)) ?? Data()
-                do {
-                    let id = try await PhotoLibrary.create(print: result.jpeg, original: saveOriginal ? frame.originalData : nil,
-                                                           recipe: recipe, location: fix, date: options.date)
-                    roll.setPhotosID(id, for: item)
-                } catch {
-                    show("Saved on the roll, but not to Photos: \(error.localizedDescription)")
-                }
+            guard saveToPhotos else { return }
+            let recipe = (try? JSONEncoder().encode(result.options)) ?? Data()
+            do {
+                let id = try await PhotoLibrary.create(print: result.jpeg, original: original, recipe: recipe, location: fix, date: result.options.date)
+                roll.setPhotosID(id, for: item)
+            } catch {
+                show("Saved on the roll, but not to Photos: \(error.localizedDescription)")
             }
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    // MARK: panorama
+
+    /// Shots of a panorama in progress.
+    struct PanoShots {
+        var scenes: [CIImage] = []
+        var ghost: UIImage?
+        var sceneReferred = true
+        var focal35: Double?
+        var metadata: [String: Any] = [:]
+        var location: CLLocation?
+        var capturing = false
+    }
+    private(set) var pano: PanoShots?
+
+    private func panoShot() {
+        if pano == nil { pano = PanoShots() }
+        guard pano?.capturing == false, (pano?.scenes.count ?? 0) < Panorama.maxFrames else { return }
+        pano?.capturing = true
+        let fix = prefs.saveLocation ? location.current : nil
+        Task {
+            do {
+                let frame = try await camera.capture(flash: .off, location: fix)
+                if pano?.scenes.isEmpty == true {
+                    camera.lockForPanorama(true)
+                    pano?.metadata = frame.metadata; pano?.location = fix
+                    let exif = frame.metadata[kCGImagePropertyExifDictionary as String] as? [String: Any]
+                    pano?.focal35 = (exif?[kCGImagePropertyExifFocalLenIn35mmFilm as String] as? NSNumber)?.doubleValue
+                        ?? (camera.isSimulated ? nil : 26)
+                }
+                let (scene, referred) = try await Darkroom.shared.panoScene(of: frame)
+                let ghost = await Darkroom.shared.panoGhost(scene).map { UIImage(cgImage: $0) }
+                guard pano != nil else { return }          // cancelled meanwhile
+                pano?.scenes.append(scene); pano?.sceneReferred = referred; pano?.ghost = ghost
+                pano?.capturing = false
+                Feedback.advance()
+                if (pano?.scenes.count ?? 0) >= Panorama.maxFrames { finishPanorama() }
+            } catch {
+                pano?.capturing = false
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// Stitches and develops the panorama.
+    func finishPanorama() {
+        guard let shots = pano, shots.scenes.count >= 2, !shots.capturing else { return }
+        pano = nil
+        camera.lockForPanorama(false)
+        let stock = prefs.resolveStock()
+        var options = currentOptions(for: stock)
+        options.portraitLens = nil
+        developingCount += 1
+        Task {
+            defer { developingCount -= 1 }
+            do {
+                let result = try await Darkroom.shared.developPanorama(shots.scenes, sceneReferred: shots.sceneReferred, focal35: shots.focal35,
+                                                                       metadata: shots.metadata, stock: stock, options: options)
+                await keep(result, stock: stock, original: nil, location: shots.location, saveToPhotos: prefs.saveToPhotos)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func cancelPanorama() {
+        pano = nil
+        camera.lockForPanorama(false)
     }
 
     /// Develops photos picked from the library (RAW or regular) on the current stock, keeping their full frame.
@@ -364,6 +441,28 @@ final class AppModel {
     func developDemoRollIfRequested() async {
         let args = ProcessInfo.processInfo.arguments
         guard camera.isSimulated else { return }
+        // `-demoPanoUI`: PANO mode with one shot taken. `-demoPano`: three overlapping crops of the test scene,
+        // stitched and developed (written to Documents/DemoOut/pano.jpg).
+        if args.contains("-demoPanoUI") {
+            prefs.panoMode = true
+            panoShot()
+            return
+        }
+        if args.contains("-demoPano") {
+            let out = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("DemoOut")
+            try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+            let scene = SimulatedScene.capture, e = scene.extent
+            let w = (e.width * 0.5).rounded(), step = (e.width * 0.25).rounded()
+            let strips = (0..<3).map { scene.cropped(to: CGRect(x: e.minX + CGFloat($0) * step, y: e.minY, width: w, height: e.height)) }
+            do {
+                let result = try await Darkroom.shared.developPanorama(strips, sceneReferred: false, focal35: nil, metadata: [:],
+                                                                       stock: .honey, options: currentOptions(for: .honey))
+                try result.jpeg.write(to: out.appendingPathComponent("pano.jpg"))
+            } catch {
+                try? "\(error)".write(to: out.appendingPathComponent("pano-error.txt"), atomically: true, encoding: .utf8)
+            }
+            return
+        }
         // `-demoSheet` / `-demoDouble`: a contact sheet of the roll and a double exposure of its two newest frames,
         // written to Documents/DemoOut.
         if args.contains("-demoSheet") || args.contains("-demoDouble") {

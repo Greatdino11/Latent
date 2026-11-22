@@ -1,3 +1,4 @@
+import simd
 import CoreImage
 import XCTest
 @testable import Latent
@@ -584,5 +585,48 @@ final class MeterTests: XCTestCase {
         XCTAssertEqual(MatchNeedle.shutter(0), "—")
         XCTAssertEqual(MatchNeedle.shutter(1.0 / 125), "1/125")
         XCTAssertEqual(MatchNeedle.shutter(2), "2\"")
+    }
+}
+
+final class PanoramaTests: XCTestCase {
+    private let linear = CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!
+    private func pixel(_ i: CIImage, _ p: CGPoint) -> SIMD3<Float> {
+        var px = [Float](repeating: 0, count: 4)
+        CIContext().render(i, toBitmap: &px, rowBytes: 16, bounds: CGRect(x: p.x, y: p.y, width: 1, height: 1), format: .RGBAf, colorSpace: linear)
+        return SIMD3(px[0], px[1], px[2])
+    }
+
+    /// Three overlapping strips of one scene stitch back into (most of) the scene, in the right place.
+    func testStripsStitchBackTogether() throws {
+        let scene = SimulatedScene.capture
+        let e = scene.extent
+        let w = (e.width * 0.5).rounded(), step = (e.width * 0.25).rounded()
+        let strips = (0..<3).map { i in
+            scene.cropped(to: CGRect(x: e.minX + CGFloat(i) * step, y: e.minY, width: w, height: e.height))
+        }
+        let pano = try Panorama.stitch(strips, focal35: nil)
+        // Width close to the original (allowing for the clean-edge crop), height kept.
+        XCTAssertGreaterThan(pano.extent.width, e.width * 0.9)
+        XCTAssertLessThanOrEqual(pano.extent.width, e.width + 2)
+        XCTAssertGreaterThan(pano.extent.height, e.height * 0.95)
+        // Points right across the panorama, including both overlaps, match the scene and are fully opaque.
+        let dx = e.width - pano.extent.width, dy = e.height - pano.extent.height
+        for fx in [0.15, 0.3, 0.38, 0.5, 0.62, 0.7, 0.85] {
+            for fy in [0.3, 0.6] {
+                let p = CGPoint(x: (pano.extent.width * fx).rounded(), y: (pano.extent.height * fy).rounded())
+                let original = pixel(scene, CGPoint(x: e.minX + p.x + dx / 2, y: e.minY + p.y + dy / 2))
+                XCTAssertLessThan(simd_length(pixel(pano, p) - original), 0.08, "at \(fx), \(fy)")
+            }
+        }
+        var px = [Float](repeating: 0, count: 4)
+        CIContext().render(pano, toBitmap: &px, rowBytes: 16, bounds: CGRect(x: (pano.extent.width * 0.38).rounded(), y: 100, width: 1, height: 1),
+                           format: .RGBAf, colorSpace: linear)
+        XCTAssertEqual(px[3], 1, accuracy: 0.001, "overlaps stay opaque")
+    }
+
+    func testRejectsUnrelatedFrames() {
+        let a = SimulatedScene.capture
+        let b = CIImage(color: .gray).cropped(to: a.extent)
+        XCTAssertThrowsError(try Panorama.stitch([a, b], focal35: nil))
     }
 }

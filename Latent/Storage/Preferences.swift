@@ -24,6 +24,8 @@ final class Preferences {
     var shutter: Double { didSet { d.set(shutter, forKey: "shutter") } }
     /// Long exposures keep moving lights as solid trails.
     var trails: Bool { didSet { d.set(trails, forKey: "trails") } }
+    /// The shutter takes panorama shots (stitched when done) instead of single photos.
+    var panoMode = false
     /// Expired-film amount for new frames (0…1).
     var expired: Double { didSet { d.set(expired, forKey: "expired") } }
     /// Lab scanner look for new frames.

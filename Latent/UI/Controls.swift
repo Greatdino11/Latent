@@ -239,13 +239,33 @@ struct ControlDeck: View {
     @Binding var showRoll: Bool
 
     var body: some View {
+        let panoShots = model.pano?.scenes.count ?? 0
         HStack {
-            RollThumb()
-                .onTapGesture { showRoll = true }
+            if model.prefs.panoMode && panoShots > 0 {
+                Button { model.cancelPanorama() } label: {
+                    Text("CANCEL").font(Theme.mono(12, .bold)).foregroundStyle(Theme.label)
+                        .frame(width: 76, height: 44).background(Capsule().fill(Theme.panel))
+                }
+                .buttonStyle(.plain)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            ShutterButton(enabled: model.camera.isReady) { model.capture() }
-            LensPicker()
+            } else {
+                RollThumb()
+                    .onTapGesture { showRoll = true }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            ShutterButton(enabled: model.camera.isReady && model.pano?.capturing != true) { model.capture() }
+            if model.prefs.panoMode && panoShots > 0 {
+                Button { model.finishPanorama() } label: {
+                    Text("DONE").font(Theme.mono(13, .bold)).foregroundStyle(panoShots >= 2 ? .black : Theme.dim)
+                        .frame(width: 76, height: 44).background(Capsule().fill(panoShots >= 2 ? Theme.amber : Theme.panel))
+                }
+                .buttonStyle(.plain)
+                .disabled(panoShots < 2 || model.pano?.capturing == true)
                 .frame(maxWidth: .infinity, alignment: .trailing)
+            } else {
+                LensPicker()
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
         }
         .frame(height: 84)
     }

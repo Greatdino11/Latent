@@ -27,6 +27,9 @@ struct Viewfinder: View {
                                 .position(x: frame.midX, y: frame.minY + 18)
                                 .allowsHitTesting(false)
                         }
+                        if prefs.panoMode {
+                            PanoGuide(frame: frame)
+                        }
                         if prefs.showMeter {
                             MatchNeedle(meter: model.camera.meter, manual: prefs.shutter > 0, simulated: model.camera.isSimulated)
                                 .position(x: frame.maxX - 62, y: frame.minY + 24)
@@ -224,5 +227,39 @@ struct MatchNeedle: View {
         guard s.isFinite, s > 0 else { return "—" }
         if s >= 0.95 { return String(format: "%.0f\"", s.rounded()) }
         return "1/\(Int((1 / max(s, 1e-4)).rounded()))"
+    }
+}
+
+/// Panorama help on the viewfinder: the last shot's right edge, faint, at the left so the next shot can overlap
+/// it, and how many shots are in.
+struct PanoGuide: View {
+    @Environment(AppModel.self) private var model
+    let frame: CGRect
+
+    var body: some View {
+        let n = model.pano?.scenes.count ?? 0
+        ZStack {
+            if let ghost = model.pano?.ghost {
+                // The right third of the last shot, laid over the left third of the view.
+                Image(uiImage: ghost).resizable().scaledToFill()
+                    .frame(width: frame.width, height: frame.height)
+                    .offset(x: -frame.width * 0.67)
+                    .frame(width: frame.width * 0.33, height: frame.height, alignment: .leading)
+                    .clipped()
+                    .opacity(0.45)
+                    .position(x: frame.minX + frame.width * 0.165, y: frame.midY)
+                Rectangle().fill(Theme.amber).frame(width: 2, height: frame.height)
+                    .position(x: frame.minX + frame.width * 0.33, y: frame.midY)
+            }
+            Text(n == 0 ? "PANO · FIRST SHOT LOCKS EXPOSURE" : "PANO \(n)/\(Panorama.maxFrames) · TURN RIGHT, LINE UP THE EDGE")
+                .font(Theme.mono(10, .bold)).foregroundStyle(Theme.amber)
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(.black.opacity(0.6), in: Capsule())
+                .position(x: frame.midX, y: frame.minY + 56)
+            if model.pano?.capturing == true {
+                ProgressView().tint(Theme.amber).position(x: frame.midX, y: frame.midY)
+            }
+        }
+        .allowsHitTesting(false)
     }
 }

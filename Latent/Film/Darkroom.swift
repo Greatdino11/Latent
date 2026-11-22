@@ -53,6 +53,32 @@ actor Darkroom {
         return DevelopResult(jpeg: jpeg, negative: negative, options: options, depth: depth?.png)
     }
 
+    /// One pano shot, decoded to scene light and held in memory until the panorama is stitched. Scaled so five fit
+    /// comfortably (long side ≤ 3024 px).
+    func panoScene(of frame: CapturedFrame) throws -> (image: CIImage, sceneReferred: Bool) {
+        let (decoded, sceneReferred) = try decode(frame)
+        let long = max(decoded.extent.width, decoded.extent.height)
+        let k = min(1, 3024 / long)
+        let scaled = k < 0.999 ? decoded.applyingFilter("CILanczosScaleTransform", parameters: [kCIInputScaleKey: k]) : decoded
+        return (try materialize(scaled), sceneReferred)
+    }
+
+    /// A small plain rendering of a pano shot, for lining up the next one.
+    func panoGhost(_ scene: CIImage) -> CGImage? {
+        let long = max(scene.extent.width, scene.extent.height)
+        let small = scene.applyingFilter("CILanczosScaleTransform", parameters: [kCIInputScaleKey: 700 / long])
+        return context.createCGImage(small, from: small.extent, format: .RGBA8, colorSpace: sRGB)
+    }
+
+    /// Stitches the pano shots and develops the result as one frame.
+    func developPanorama(_ scenes: [CIImage], sceneReferred: Bool, focal35: Double?, metadata: [String: Any],
+                         stock: FilmStock, options: DevelopOptions) throws -> DevelopResult {
+        let stitched = try materialize(Panorama.stitch(scenes, focal35: focal35))
+        var o = options
+        o.aspect = nil; o.cropShift = nil; o.portraitLens = nil
+        return try develop(CapturedFrame(source: .image(stitched, sceneReferred: sceneReferred), metadata: metadata), stock: stock, options: o)
+    }
+
     /// Prints a stored negative again, on any stock.
     func redevelop(negative: Data, depth: Data? = nil, metadata: [String: Any], stock: FilmStock, options: DevelopOptions) throws -> Data {
         guard let stored = CIImage(data: negative) else { throw DarkroomError.decode }

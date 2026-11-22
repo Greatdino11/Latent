@@ -367,6 +367,25 @@ final class CameraController: NSObject {
         return CapturedFrame(source: .image(image, sceneReferred: false), metadata: meta, location: location)
     }
 
+    /// Panorama: after the first shot, hold exposure, white balance and focus so every frame matches (the seams
+    /// disappear only if the frames do).
+    func lockForPanorama(_ on: Bool) {
+        if isSimulated { return }
+        queue.async {
+            guard let d = self.device, (try? d.lockForConfiguration()) != nil else { return }
+            if on {
+                if d.isExposureModeSupported(.locked) { d.exposureMode = .locked }
+                if d.isWhiteBalanceModeSupported(.locked) { d.whiteBalanceMode = .locked }
+                if d.isFocusModeSupported(.locked) { d.focusMode = .locked }
+            } else {
+                if d.isExposureModeSupported(.continuousAutoExposure) { d.exposureMode = .continuousAutoExposure }
+                if d.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) { d.whiteBalanceMode = .continuousAutoWhiteBalance }
+                if d.isFocusModeSupported(.continuousAutoFocus) { d.focusMode = .continuousAutoFocus }
+            }
+            d.unlockForConfiguration()
+        }
+    }
+
     /// Switches Process Zero (single-frame Bayer RAW) on or off.
     func setZero(_ on: Bool) {
         queue.async {
