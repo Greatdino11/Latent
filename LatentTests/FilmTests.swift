@@ -490,3 +490,30 @@ final class FlareTests: XCTestCase {
         XCTAssertLessThanOrEqual(o.x, o.z + 0.005)
     }
 }
+
+final class LongExposureTests: XCTestCase {
+    private let linear = CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!
+    private func flat(_ v: Double) -> CIImage {
+        CIImage(color: CIColor(red: v, green: v, blue: v, alpha: 1, colorSpace: linear)!).cropped(to: CGRect(x: 0, y: 0, width: 8, height: 8))
+    }
+    private func value(_ i: CIImage) -> Float {
+        var px = [Float](repeating: 0, count: 4)
+        CIContext().render(i, toBitmap: &px, rowBytes: 16, bounds: CGRect(x: 4, y: 4, width: 1, height: 1), format: .RGBAf, colorSpace: linear)
+        return px[1]
+    }
+
+    /// Four frames of a dim wall average to the wall; a headlight that passed once survives as a trail.
+    func testTrailsKeepPassingLights() {
+        let wallSum = flat(0.4), wallMax = flat(0.12)                       // 4 × 0.1
+        XCTAssertEqual(value(LongExposure.blend(sum: wallSum, max: wallMax, count: 4, trails: true)), 0.1, accuracy: 0.003)
+        let lightSum = flat(1.3), lightMax = flat(1.0)                      // 0.1 × 3 + a 1.0 headlight
+        XCTAssertEqual(value(LongExposure.blend(sum: lightSum, max: lightMax, count: 4, trails: true)), 1.0, accuracy: 0.01)
+        XCTAssertEqual(value(LongExposure.blend(sum: lightSum, max: lightMax, count: 4, trails: false)), 0.325, accuracy: 0.003)
+    }
+
+    func testShutterLabels() {
+        XCTAssertEqual(LongExposure.label(0), "AUTO")
+        XCTAssertEqual(LongExposure.label(1.0 / 15), "1/15")
+        XCTAssertEqual(LongExposure.label(8), "8\"")
+    }
+}

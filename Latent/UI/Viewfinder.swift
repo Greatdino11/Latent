@@ -27,6 +27,25 @@ struct Viewfinder: View {
                                 .position(x: frame.midX, y: frame.minY + 18)
                                 .allowsHitTesting(false)
                         }
+                        if let p = model.exposing {
+                            // A long exposure is running: keep still.
+                            VStack(spacing: 10) {
+                                ZStack {
+                                    Circle().stroke(Color.white.opacity(0.2), lineWidth: 4)
+                                    Circle().trim(from: 0, to: p).stroke(Theme.amber, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                                        .rotationEffect(.degrees(-90))
+                                    Text("\(max(0, Int((model.exposingSeconds * (1 - p)).rounded(.up))))")
+                                        .font(.system(size: 34, weight: .bold, design: .monospaced)).foregroundStyle(Theme.amber)
+                                        .contentTransition(.numericText(countsDown: true))
+                                }
+                                .frame(width: 92, height: 92)
+                                Text("EXPOSING · HOLD STILL").font(Theme.mono(11, .bold)).foregroundStyle(Theme.amber)
+                            }
+                            .padding(18).background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 16))
+                            .animation(.linear(duration: 0.2), value: p)
+                            .position(x: frame.midX, y: frame.midY)
+                            .allowsHitTesting(false)
+                        }
                         if let n = model.countdown {
                             Text("\(n)")
                                 .font(.system(size: 96, weight: .bold, design: .monospaced)).foregroundStyle(Theme.amber)

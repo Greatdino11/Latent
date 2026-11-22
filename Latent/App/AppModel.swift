@@ -66,6 +66,7 @@ final class AppModel {
         FilmAdvanceSound.configureSession()   // never interrupt music or podcasts
         camera.setHighResolution(prefs.highResolution)
         camera.setZero(prefs.zeroProcess)
+        camera.setSlowShutter(prefs.shutter)
         await camera.start()
         updateSensors()
         photosSync.refresh()
@@ -84,6 +85,10 @@ final class AppModel {
     }
 
     // MARK: capture
+
+    /// A long exposure in progress: how far through it is (0…1), and how long it is.
+    private(set) var exposing: Double?
+    private(set) var exposingSeconds: Double = 0
 
     /// Self-timer: 0 (off), 3 or 10 seconds.
     var timerSeconds = 0
@@ -113,7 +118,7 @@ final class AppModel {
     }
 
     private func fire() {
-        guard camera.isReady else { return }
+        guard camera.isReady, exposing == nil else { return }
         guard developingCount < maxPending else {
             show("Developing… one moment")
             return
@@ -150,7 +155,20 @@ final class AppModel {
         developingCount += 1
         defer { developingCount -= 1 }
         do {
-            let frame = try await camera.capture(flash: flash, location: fix)
+            let shutter = prefs.shutter
+            let frame: CapturedFrame
+            if shutter > camera.maxSingleExposure + 0.001 {
+                // Longer than one frame can expose: stack frames for the whole time.
+                exposingSeconds = shutter; exposing = 0
+                do {
+                    frame = try await camera.captureStack(seconds: shutter, trails: prefs.trails, location: fix) { p in
+                        Task { @MainActor in if self.exposing != nil { self.exposing = p } }
+                    }
+                    exposing = nil
+                } catch { exposing = nil; throw error }
+            } else {
+                frame = try await camera.capture(flash: flash, location: fix, shutter: shutter)
+            }
             let started = Date()
             let result = try await Darkroom.shared.develop(frame, stock: stock, options: options)
             lastDevelopSeconds = Date().timeIntervalSince(started)

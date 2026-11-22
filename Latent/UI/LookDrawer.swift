@@ -104,6 +104,24 @@ struct LookDrawer: View {
                     }
                 }
 
+                group("SHUTTER", note: prefs.shutter > 1
+                      ? "Over 1 s, Latent stacks frames for the whole time. Prop the phone up or hold very still, and use the self-timer. TRAILS keeps moving lights as solid lines."
+                      : prefs.shutter > 0 ? "A slow shutter blurs motion. In bright light it can only go so dark: watch the meter needle." : nil) {
+                    chips {
+                        ForEach(LongExposure.choices, id: \.self) { s in
+                            LookChip(title: LongExposure.label(s), on: prefs.shutter == s) {
+                                prefs.shutter = s
+                                model.camera.setSlowShutter(s)
+                            }
+                        }
+                    }
+                    if prefs.shutter > 1 {
+                        chips {
+                            LookChip(title: prefs.trails ? "TRAILS ✓" : "TRAILS", on: prefs.trails) { prefs.trails.toggle() }
+                        }
+                    }
+                }
+
                 group("LIGHT LEAKS") {
                     chips {
                         LookChip(title: "OFF", on: prefs.lightLeak == 0) { prefs.lightLeak = 0 }
@@ -189,6 +207,7 @@ struct LookDrawer: View {
         p.lightLeak = 0; p.frameStyle = .none; p.blurAmount = 0.6
         if !p.isRandom { p.stockStrength[p.selectedStockID] = nil }
         if p.highResolution || p.zeroProcess { setCapture(highRes: false, zero: false) }
+        if p.shutter > 0 { p.shutter = 0; model.camera.setSlowShutter(0) }
     }
 }
 
@@ -217,6 +236,7 @@ enum ActiveLook {
         case .white, .black: out.append("\(p.frameStyle.label.uppercased()) BORDER")
         }
         if p.dateStamp { out.append("DATE") }
+        if p.shutter > 0 { out.append(LongExposure.label(p.shutter) + (p.shutter > 1 && p.trails ? " TRAILS" : "")) }
         if p.zeroProcess { out.append("ZERO") } else if p.highResolution { out.append("48MP") }
         return out
     }

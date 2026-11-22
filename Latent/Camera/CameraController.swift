@@ -53,6 +53,11 @@ final class CameraController: NSObject {
     @ObservationIgnored private var wantsHighResolution = false
     /// Process Zero: capture one unmerged Bayer RAW frame instead of ProRAW.
     @ObservationIgnored private var wantsZero = false
+    /// A manual (slow) shutter is set: needs a physical camera, which allows custom exposure.
+    @ObservationIgnored private var wantsSlowShutter = false
+    @ObservationIgnored private var stackOutput: AVCaptureVideoDataOutput?
+    @ObservationIgnored private let stackQueue = DispatchQueue(label: "latent.stack")
+    @ObservationIgnored private var inFlightStack: FrameStacker?
     @ObservationIgnored private var ultraWideCamera: AVCaptureDevice?
     @ObservationIgnored private var teleCamera: AVCaptureDevice?
     /// The back camera as one virtual device (smooth lens switching, but its photos stop at 12MP).
@@ -187,7 +192,7 @@ final class CameraController: NSObject {
         // Process Zero needs a single physical camera too (virtual devices don't deliver Bayer RAW): the one behind
         // the chosen lens.
         var target = wantMain ? main : virtual
-        if wantsZero {
+        if wantsZero || wantsSlowShutter {
             if lensZoom < baseZoom - 0.01, let uw = ultraWideCamera { target = uw }
             else if lensZoom > baseZoom * 2.5, let tele = teleCamera { target = tele }
             else { target = main }
@@ -226,6 +231,112 @@ final class CameraController: NSObject {
         if !device.constituentDevices.isEmpty || virtualDevice == nil { return lensZoom }
         if device.uniqueID == mainCamera?.uniqueID { return max(1, lensZoom / baseZoom) }
         return 1
+    }
+
+    /// Manual shutter on or off (0 = automatic).
+    func setSlowShutter(_ seconds: Double) {
+        queue.async {
+            self.wantsSlowShutter = seconds > 0
+            self.routeForResolution()
+        }
+    }
+
+    /// The longest exposure one frame can take on the current camera.
+    var maxSingleExposure: Double {
+        guard let d = device else { return 1 }
+        let minFps = d.activeFormat.videoSupportedFrameRateRanges.map(\.minFrameRate).min() ?? 1
+        return min(d.activeFormat.maxExposureDuration.seconds, 1 / max(minFps, 0.5))
+    }
+
+    /// Camera queue. Holds the shutter at `seconds`, raising or lowering ISO to keep the metered brightness (as far
+    /// as the sensor's ISO range allows), and calls back once frames are exposed that way.
+    private func holdShutter(_ seconds: Double, then done: @escaping () -> Void) {
+        guard let d = device, d.isExposureModeSupported(.custom), (try? d.lockForConfiguration()) != nil else { done(); return }
+        let duration = CMTime(seconds: min(seconds, d.activeFormat.maxExposureDuration.seconds), preferredTimescale: 1_000_000)
+        if duration > d.activeVideoMaxFrameDuration { d.activeVideoMaxFrameDuration = duration }
+        let product = d.exposureDuration.seconds * Double(d.iso)
+        let iso = Float(product / duration.seconds).clamped(d.activeFormat.minISO, d.activeFormat.maxISO)
+        d.setExposureModeCustom(duration: duration, iso: iso) { _ in done() }
+        d.unlockForConfiguration()
+    }
+
+    /// Camera queue. Back to automatic exposure and normal frame rates after a manual shutter.
+    private func releaseShutter() {
+        guard let d = device, (try? d.lockForConfiguration()) != nil else { return }
+        d.activeVideoMinFrameDuration = .invalid
+        d.activeVideoMaxFrameDuration = .invalid
+        if d.isExposureModeSupported(.continuousAutoExposure) { d.exposureMode = .continuousAutoExposure }
+        d.setExposureTargetBias(min(max(exposureBias, d.minExposureTargetBias), d.maxExposureTargetBias))
+        d.unlockForConfiguration()
+        Task { @MainActor in self.aeafLocked = false }
+    }
+
+    /// A long exposure (beyond one frame) by stacking a continuous run of video frames for `seconds`.
+    func captureStack(seconds: Double, trails: Bool, location: CLLocation?, progress: @escaping @Sendable (Double) -> Void) async throws -> CapturedFrame {
+        if isSimulated {
+            for i in 1...10 { try? await Task.sleep(for: .seconds(seconds / 10)); progress(Double(i) / 10) }
+            return CapturedFrame(source: .image(SimulatedScene.capture, sceneReferred: false), metadata: [:], location: location)
+        }
+        guard status == .running else { throw CameraError.unavailable }
+        let (sum, peak, count): (CIImage, CIImage, Int) = try await withCheckedThrowingContinuation { cont in
+            queue.async {
+                guard let d = self.device else { cont.resume(throwing: CameraError.unavailable); return }
+                let stacker = FrameStacker(seconds: seconds, progress: progress) { result in
+                    self.queue.async {
+                        self.session.beginConfiguration()
+                        if let out = self.stackOutput { self.session.removeOutput(out) }
+                        self.stackOutput = nil
+                        self.session.commitConfiguration()
+                        self.releaseShutter()
+                        cont.resume(with: result.map { ($0.sum, $0.max, $0.count) })
+                    }
+                }
+                // Each frame as long as the sensor and frame rate allow at base ISO (long, clean frames make
+                // unbroken light trails at night); short frames at a steady 30 fps in bright light.
+                let product = d.exposureDuration.seconds * Double(d.iso)
+                let minFps = Double(d.activeFormat.videoSupportedFrameRateRanges.map(\.minFrameRate).min() ?? 1)
+                let longest = min(d.activeFormat.maxExposureDuration.seconds, 1 / max(minFps, 1), 0.5)
+                let exposure = (product / Double(d.activeFormat.minISO)).clamped(d.activeFormat.minExposureDuration.seconds, longest)
+                let frame = max(exposure, 1.0 / 30)
+                let iso = Float(product / exposure).clamped(d.activeFormat.minISO, d.activeFormat.maxISO)
+
+                let out = AVCaptureVideoDataOutput()
+                out.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+                out.alwaysDiscardsLateVideoFrames = true
+                self.session.beginConfiguration()
+                guard self.session.canAddOutput(out) else {
+                    self.session.commitConfiguration(); cont.resume(throwing: CameraError.unavailable); return
+                }
+                self.session.addOutput(out)
+                if let conn = out.connection(with: .video), let angle = self.rotation?.videoRotationAngleForHorizonLevelCapture,
+                   conn.isVideoRotationAngleSupported(angle) {
+                    conn.videoRotationAngle = angle
+                }
+                self.session.commitConfiguration()
+                self.stackOutput = out
+                out.setSampleBufferDelegate(stacker, queue: self.stackQueue)
+                self.inFlightStack = stacker
+
+                if (try? d.lockForConfiguration()) != nil {
+                    let t = CMTime(seconds: frame, preferredTimescale: 1_000_000)
+                    d.activeVideoMaxFrameDuration = t
+                    d.activeVideoMinFrameDuration = t
+                    if d.isExposureModeSupported(.custom) {
+                        d.setExposureModeCustom(duration: CMTime(seconds: exposure, preferredTimescale: 1_000_000), iso: iso) { sync in
+                            self.stackQueue.async { stacker.notBefore = sync }
+                        }
+                    }
+                    d.unlockForConfiguration()
+                }
+                // Give up if frames stop arriving (camera interrupted).
+                self.stackQueue.asyncAfter(deadline: .now() + seconds + 6) { stacker.fail(CameraError.noData) }
+            }
+        }
+        inFlightStack = nil
+        var meta: [String: Any] = [:]
+        meta[kCGImagePropertyExifDictionary as String] = [kCGImagePropertyExifExposureTime as String: seconds]
+        let image = LongExposure.blend(sum: sum, max: peak, count: count, trails: trails)
+        return CapturedFrame(source: .image(image, sceneReferred: false), metadata: meta, location: location)
     }
 
     /// Switches Process Zero (single-frame Bayer RAW) on or off.
@@ -441,13 +552,18 @@ final class CameraController: NSObject {
         return d.iso >= 800 || CMTimeGetSeconds(d.exposureDuration) >= 1.0 / 30
     }
 
-    func capture(flash: FlashSetting, location: CLLocation?) async throws -> CapturedFrame {
+    /// `shutter`: a manual shutter in seconds (up to what one frame allows), or 0 for automatic.
+    func capture(flash: FlashSetting, location: CLLocation?, shutter: Double = 0) async throws -> CapturedFrame {
         if isSimulated {
             return await Task.detached(priority: .userInitiated) {
                 CapturedFrame(source: .image(SimulatedScene.capture), metadata: [:], flashFired: false, location: location)
             }.value
         }
         guard status == .running else { throw CameraError.unavailable }
+        if shutter > 0 {
+            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in queue.async { self.holdShutter(shutter) { c.resume() } } }
+        }
+        defer { if shutter > 0 { queue.async { self.releaseShutter() } } }
         return try await withCheckedThrowingContinuation { cont in
             queue.async {
                 let settings: AVCapturePhotoSettings
@@ -467,7 +583,8 @@ final class CameraController: NSObject {
                 settings.maxPhotoDimensions = self.photoOutput.maxPhotoDimensions
                 // Less multi-frame fusion = less of the over-processed phone look. In low light, allow full
                 // multi-frame capture instead: it's what keeps night frames from turning to noise.
-                settings.photoQualityPrioritization = bayer != nil ? .speed : self.isLowLight ? .quality : .balanced
+                // A manual shutter is one honest exposure: no multi-frame merging.
+                settings.photoQualityPrioritization = bayer != nil || shutter > 0 ? .speed : self.isLowLight ? .quality : .balanced
                 if self.photoOutput.supportedFlashModes.contains(flash.avMode) { settings.flashMode = flash.avMode }
                 if portrait {
                     settings.isDepthDataDeliveryEnabled = true
@@ -513,4 +630,8 @@ private final class PhotoDelegate: NSObject, AVCapturePhotoCaptureDelegate {
         frame.singleFrame = singleFrame && photo.isRawPhoto
         completion(.success(frame))
     }
+}
+
+extension Comparable {
+    func clamped(_ lo: Self, _ hi: Self) -> Self { min(max(self, lo), hi) }
 }
