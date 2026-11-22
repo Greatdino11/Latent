@@ -560,3 +560,18 @@ final class RollDayTests: XCTestCase {
         XCTAssertEqual(days[1].title, "FRI 20 NOV")
     }
 }
+
+final class SocialPrintTests: XCTestCase {
+    func testPostAndStorySizes() throws {
+        let c = CGContext(data: nil, width: 300, height: 200, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                          bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        c.setFillColor(gray: 0.4, alpha: 1); c.fill(CGRect(x: 0, y: 0, width: 300, height: 200))
+        let print = c.makeImage()!
+        for f in SocialPrint.Format.allCases {
+            let data = try XCTUnwrap(SocialPrint.render(print, format: f, border: .none, stock: "Honey 200"))
+            let img = try XCTUnwrap(UIImage(data: data))
+            XCTAssertEqual(img.size.width * img.scale, f.size.width)
+            XCTAssertEqual(img.size.height * img.scale, f.size.height)
+        }
+    }
+}

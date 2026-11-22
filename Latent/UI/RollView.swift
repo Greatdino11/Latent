@@ -410,6 +410,7 @@ private struct PhotoPager: View {
     @State private var blur = 0.6
     @State private var focus = 0.8
     @State private var grain = 1.0
+    @State private var socialURL: URL?
     @State private var halation = true
     @State private var flare = 0.6
     @State private var expired = 0.0
@@ -475,6 +476,11 @@ private struct PhotoPager: View {
                     Menu {
                         Button { save(item) } label: { Label("Save to Photos", systemImage: "square.and.arrow.down") }
                         ShareLink(item: item.url) { Label("Share", systemImage: "square.and.arrow.up") }
+                        Menu {
+                            ForEach(SocialPrint.Format.allCases) { f in
+                                Button(f.label) { shareSocial(item, f) }
+                            }
+                        } label: { Label("Share for Instagram", systemImage: "rectangle.portrait.on.rectangle.portrait") }
                         if item.hasNegative {
                             ShareLink(items: [item.negativeURL, item.recipeURL]) {
                                 Label("Share negative", systemImage: "film.stack")
@@ -486,6 +492,9 @@ private struct PhotoPager: View {
             }
         }
         .onChange(of: selection, initial: true) { load() }
+        .sheet(isPresented: Binding(get: { socialURL != nil }, set: { if !$0 { socialURL = nil } })) {
+            if let socialURL { ShareSheet(items: [socialURL]).presentationDetents([.medium, .large]) }
+        }
         .confirmationDialog("Delete this frame and its negative?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { deleteCurrent() }
         } message: { Text("Copies already saved to Photos are kept.") }
@@ -792,6 +801,24 @@ private struct PhotoPager: View {
         }
     }
 
+    /// Lays the print out as a 4:5 post or 9:16 story and opens the share sheet.
+    private func shareSocial(_ item: RollItem, _ format: SocialPrint.Format) {
+        let border = model.roll.recipe(for: item).frame
+        let stock = item.stock?.displayName ?? ""
+        status = "Preparing…"
+        Task {
+            let url = await Task.detached(priority: .userInitiated) { () -> URL? in
+                guard let src = CGImageSourceCreateWithURL(item.url as CFURL, nil),
+                      let cg = CGImageSourceCreateImageAtIndex(src, 0, nil),
+                      let data = SocialPrint.render(cg, format: format, border: border, stock: stock) else { return nil }
+                let out = FileManager.default.temporaryDirectory.appendingPathComponent("Latent \(format.rawValue) \(item.base).jpg")
+                return (try? data.write(to: out, options: .atomic)) == nil ? nil : out
+            }.value
+            status = url == nil ? "Couldn't prepare the image" : nil
+            socialURL = url
+        }
+    }
+
     private func save(_ item: RollItem) {
         Task {
             do { status = try await model.saveToPhotos(item) } catch { status = error.localizedDescription }
@@ -1023,4 +1050,13 @@ struct RollDay: Identifiable {
             return RollDay(key: k, title: title, items: groups[k]!)
         }
     }
+}
+
+/// The system share sheet (Instagram, AirDrop, Messages…) for files made on the spot.
+struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+    func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
 }
