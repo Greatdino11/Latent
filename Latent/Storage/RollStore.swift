@@ -154,6 +154,25 @@ final class RollStore {
         reload()
     }
 
+    /// Frames in the trash (newest first) and when each was removed, for the "Removed with Photos" list.
+    func trashedFrames() -> [(item: RollItem, removed: Date?)] {
+        let files = (try? FileManager.default.contentsOfDirectory(at: trashFolder, includingPropertiesForKeys: nil)) ?? []
+        return files.compactMap { url -> (RollItem, Date?)? in
+            guard let item = parse(url, in: trashFolder) else { return nil }
+            let marker = trashFolder.appendingPathComponent("\(item.base).trashed")
+            let when = (try? String(contentsOf: marker, encoding: .utf8)).flatMap {
+                ISO8601DateFormatter().date(from: $0.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+            return (item, when)
+        }
+        .sorted { $0.0.date > $1.0.date }
+    }
+
+    /// Permanently deletes one trashed frame (only ever on the user's request).
+    func deleteFromTrash(base: String) {
+        for f in files(of: base, in: trashFolder) { try? FileManager.default.removeItem(at: f) }
+    }
+
     /// Deletes frames that have been in the trash longer than `days`.
     func purgeTrash(olderThan days: Double = 30) {
         let fm = FileManager.default
@@ -217,11 +236,13 @@ final class RollStore {
         return UIImage(cgImage: cg)
     }
 
-    private func parse(_ url: URL) -> RollItem? {
+    private func parse(_ url: URL) -> RollItem? { parse(url, in: folder) }
+
+    private func parse(_ url: URL, in dir: URL) -> RollItem? {
         guard url.pathExtension == "jpg" else { return nil }
         let parts = url.deletingPathExtension().lastPathComponent.split(separator: "_", maxSplits: 1)
         guard parts.count == 2, let ms = Double(parts[0]) else { return nil }
-        return RollItem(base: String(parts[0]), stockID: String(parts[1]), date: Date(timeIntervalSince1970: ms / 1000), folder: folder)
+        return RollItem(base: String(parts[0]), stockID: String(parts[1]), date: Date(timeIntervalSince1970: ms / 1000), folder: dir)
     }
 }
 

@@ -165,10 +165,14 @@ final class RollArchiveTests: XCTestCase {
                      "1.recipe.json": Data("{}".utf8), "empty.photos": Data()]
         for (n, d) in files { try d.write(to: src.appendingPathComponent(n)) }
 
-        let archive = try RollArchive.export(from: src)
-        XCTAssertEqual(try RollArchive.importArchive(archive, into: dst), files.count)
-        for (n, d) in files { XCTAssertEqual(try Data(contentsOf: dst.appendingPathComponent(n)), d, n) }
-        XCTAssertEqual(try RollArchive.importArchive(archive, into: dst), 0, "existing files are kept, not duplicated")
+        let stocks = Data(#"[{"id":"custom-x"}]"#.utf8)
+        let archive = try RollArchive.export(from: src, stocks: stocks)
+        let first = try RollArchive.importArchive(archive, into: dst)
+        XCTAssertEqual(first.added, files.count - 1, "Photos links stay behind")
+        XCTAssertEqual(first.stocks, stocks)
+        for (n, d) in files where !n.hasSuffix(".photos") { XCTAssertEqual(try Data(contentsOf: dst.appendingPathComponent(n)), d, n) }
+        XCTAssertFalse(fm.fileExists(atPath: dst.appendingPathComponent("empty.photos").path))
+        XCTAssertEqual(try RollArchive.importArchive(archive, into: dst).added, 0, "existing files are kept, not duplicated")
     }
 
     func testRejectsNonArchive() throws {
@@ -186,7 +190,7 @@ final class RollArchiveTests: XCTestCase {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try data.write(to: url)
         let dst = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        XCTAssertEqual(try RollArchive.importArchive(url, into: dst), 0)
+        XCTAssertEqual(try RollArchive.importArchive(url, into: dst).added, 0)
         XCTAssertFalse(FileManager.default.fileExists(atPath: dst.deletingLastPathComponent().appendingPathComponent("evil.txt").path))
     }
 }
@@ -702,5 +706,24 @@ final class DetailTests: XCTestCase {
         XCTAssertGreaterThan(detail(crisp.jpeg), detail(vintage.jpeg) * 1.05)
         let again = try await Darkroom.shared.redevelop(negative: vintage.negative, metadata: [:], stock: .honey, options: vintage.options)
         XCTAssertGreaterThan(detail(again), detail(vintage.jpeg) * 0.97)
+    }
+}
+
+
+final class PhotosSyncPlanTests: XCTestCase {
+    /// Only photos the library reports as deleted take their frames off the roll — a link that simply doesn't
+    /// resolve (another phone, a restored backup, an imported roll) is left alone.
+    func testOnlyReportedDeletionsTrash() {
+        let linked = [(base: "1", photosID: "A"), (base: "2", photosID: "B"), (base: "3", photosID: "C")]
+        let plan = PhotosSync.plan(linked: linked, deleted: ["B"], trashed: [], present: [])
+        XCTAssertEqual(plan.trash, ["2"])
+        let migrated = PhotosSync.plan(linked: linked, deleted: [], trashed: [], present: [])
+        XCTAssertTrue(migrated.trash.isEmpty, "nothing reported deleted: nothing trashed, even if no link resolves")
+    }
+
+    func testRestoresWhenThePhotoComesBack() {
+        let trashed = [(base: "9", photosID: "Z"), (base: "8", photosID: "Y")]
+        let plan = PhotosSync.plan(linked: [], deleted: [], trashed: trashed, present: ["Z"])
+        XCTAssertEqual(plan.restore, ["9"])
     }
 }

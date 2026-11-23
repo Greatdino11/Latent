@@ -70,6 +70,9 @@ final class AppModel {
         await camera.start()
         camera.startMetering()
         RemoteShutter.shared.start(self)
+        photosSync.onRemoved = { [weak self] n in
+            self?.show("\(n) frame\(n == 1 ? "" : "s") left the roll because \(n == 1 ? "its photo was" : "their photos were") deleted in Photos. Restore in Settings ▸ Storage.")
+        }
         updateSensors()
         photosSync.refresh()
         orientation.start()

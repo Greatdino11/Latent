@@ -1,15 +1,19 @@
 import Photos
 
-/// Keeps the roll in step with the photo library: a frame whose saved copy is deleted in Photos leaves the roll
-/// (into a 30-day trash), and comes back if the photo is restored from Recently Deleted.
+/// Keeps the roll in step with the photo library: a frame whose saved copy the user deletes in Photos leaves the
+/// roll (into a trash they can see and restore from), and comes back if the photo is restored from Recently Deleted.
 ///
-/// Only runs with full library access: with limited access, photos outside the selection look "missing" and
-/// would wrongly empty the roll.
+/// Only *real deletions* count: they're read from the library's persistent change history since the last check.
+/// A link that merely doesn't resolve — another iPhone, a restored backup, an imported roll — is never treated as
+/// a deletion, and nothing is ever deleted for good without the user asking.
 @MainActor
 final class PhotosSync: NSObject, PHPhotoLibraryChangeObserver {
     private let roll: RollStore
     private var observing = false
     private var pending: Task<Void, Never>?
+    /// Told how many frames just moved to the trash, so the user hears about it.
+    var onRemoved: ((Int) -> Void)?
+    private static let tokenKey = "photosChangeToken"
 
     init(roll: RollStore) { self.roll = roll }
 
@@ -19,40 +23,71 @@ final class PhotosSync: NSObject, PHPhotoLibraryChangeObserver {
     func refresh() {
         guard Self.hasFullAccess else { return }
         if !observing { PHPhotoLibrary.shared().register(self); observing = true }
-        roll.purgeTrash()
-        reconcile()
+        sync()
     }
 
     nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {
-        Task { @MainActor in self.scheduleReconcile() }
+        Task { @MainActor in self.scheduleSync() }
     }
 
-    private func scheduleReconcile() {
+    private func scheduleSync() {
         pending?.cancel()
         pending = Task {
             try? await Task.sleep(for: .seconds(0.8))     // a delete of many photos arrives as a burst
             guard !Task.isCancelled else { return }
-            reconcile()
+            sync()
         }
     }
 
-    private func reconcile() {
+    private func sync() {
         guard Self.hasFullAccess else { return }
-        let linked = roll.items.compactMap { item in roll.photosID(for: item).map { (item, $0) } }
-        let trashed = roll.trashedPhotoLinks()
-        let ids = linked.map(\.1) + trashed.map(\.photosID)
-        guard !ids.isEmpty else { return }
-        let options = PHFetchOptions()
-        options.includeHiddenAssets = true                 // hidden in Photos isn't deleted
-        var present = Set<String>()
-        PHAsset.fetchAssets(withLocalIdentifiers: ids, options: options).enumerateObjects { asset, _, _ in
-            present.insert(asset.localIdentifier)
+        let library = PHPhotoLibrary.shared()
+        var deleted = Set<String>()
+        if let saved = loadToken() {
+            do {
+                for change in try library.fetchPersistentChanges(since: saved) {
+                    if let details = try? change.changeDetails(for: .asset) { deleted.formUnion(details.deletedLocalIdentifiers) }
+                }
+            } catch {
+                // A token from another library (new phone, restored backup) or too old to read: start afresh and
+                // remove nothing.
+                deleted = []
+            }
         }
-        let gone = linked.filter { !present.contains($0.1) }
-        // If every linked photo seems to have vanished at once, the library is more likely unavailable (being
-        // restored, signed out of iCloud) than emptied by hand: leave the roll alone.
-        if gone.count == linked.count, linked.count > 5 { return }
-        for (item, _) in gone { roll.trash(item) }
-        for t in trashed where present.contains(t.photosID) { roll.restore(base: t.base) }
+        saveToken(library.currentChangeToken)
+
+        let linked = roll.items.compactMap { item in roll.photosID(for: item).map { (base: item.base, photosID: $0) } }
+        let trashed = roll.trashedPhotoLinks()
+        var present = Set<String>()
+        if !trashed.isEmpty {
+            let options = PHFetchOptions()
+            options.includeHiddenAssets = true
+            PHAsset.fetchAssets(withLocalIdentifiers: trashed.map(\.photosID), options: options)
+                .enumerateObjects { asset, _, _ in present.insert(asset.localIdentifier) }
+        }
+        let plan = Self.plan(linked: linked, deleted: deleted, trashed: trashed, present: present)
+        for base in plan.trash { if let item = roll.item(id: base) { roll.trash(item) } }
+        for base in plan.restore { roll.restore(base: base) }
+        if !plan.trash.isEmpty { onRemoved?(plan.trash.count) }
+    }
+
+    /// What to do, decided from facts alone (so it can be tested): trash frames whose photo was *reported deleted*,
+    /// restore trashed frames whose photo is back.
+    nonisolated static func plan(linked: [(base: String, photosID: String)], deleted: Set<String>,
+                                 trashed: [(base: String, photosID: String)], present: Set<String>) -> (trash: [String], restore: [String]) {
+        let trash = linked.filter { deleted.contains($0.photosID) }.map(\.base)
+        let restore = trashed.filter { present.contains($0.photosID) && !deleted.contains($0.photosID) }.map(\.base)
+        return (trash, restore)
+    }
+
+    private func loadToken() -> PHPersistentChangeToken? {
+        guard let data = UserDefaults.standard.data(forKey: Self.tokenKey) else { return nil }
+        return try? NSKeyedUnarchiver.unarchivedObject(ofClass: PHPersistentChangeToken.self, from: data)
+    }
+
+    private func saveToken(_ token: PHPersistentChangeToken) {
+        if let data = try? NSKeyedArchiver.archivedData(withRootObject: token, requiringSecureCoding: true) {
+            UserDefaults.standard.set(data, forKey: Self.tokenKey)
+        }
     }
 }

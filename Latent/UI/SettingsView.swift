@@ -42,7 +42,7 @@ struct SettingsView: View {
                     Toggle("Save to Photos", isOn: $prefs.saveToPhotos)
                     Toggle("Keep the original underneath", isOn: $prefs.saveOriginal).disabled(!prefs.saveToPhotos)
                 } header: { Text("Library") } footer: {
-                    Text("Each frame is one photo in your library: a standard-range (SDR) print that looks the same on every screen. Re-developing it on the roll updates that photo, and deleting it in Photos removes it from the roll too (it comes back if you restore it from Recently Deleted within 30 days; needs Full Access to Photos). \"Keep the original underneath\" also stores the RAW (about 25 MB) so Edit ▸ Revert in Photos brings it back — but Photos shows that RAW in HDR, and apps like Lightroom may import it instead of your print. Leave it off for SDR-only photos.")
+                    Text("Each frame is one photo in your library: a standard-range (SDR) print that looks the same on every screen. Re-developing it on the roll updates that photo, and deleting it in Photos moves it off the roll to Storage ▸ Removed with Photos, where you can restore it (needs Full Access to Photos). Nothing there is deleted unless you do it. \"Keep the original underneath\" also stores the RAW (about 25 MB) so Edit ▸ Revert in Photos brings it back — but Photos shows that RAW in HDR, and apps like Lightroom may import it instead of your print. Leave it off for SDR-only photos.")
                 }
                 Section {
                     LabeledContent("Prints", value: bytes(usage.prints))
@@ -53,6 +53,11 @@ struct SettingsView: View {
                     }
                     Button("Import roll…") { importing = true }
                     if let archiveStatus { Text(archiveStatus).font(.footnote).foregroundStyle(.secondary) }
+                    NavigationLink {
+                        RemovedFramesView()
+                    } label: {
+                        LabeledContent("Removed with Photos", value: "\(model.roll.trashedFrames().count)")
+                    }
                     Button("Discard negatives older than 30 days") { confirmDiscard = .some(30) }
                         .disabled(usage.negativeCount == 0)
                     Button("Discard all negatives", role: .destructive) { confirmDiscard = .some(nil) }
@@ -69,6 +74,10 @@ struct SettingsView: View {
                 }
             }
             .onAppear { usage = model.roll.usage() }
+            .onDisappear {
+                // A roll file can be gigabytes: don't leave it behind in temporary storage.
+                if let archiveURL { try? FileManager.default.removeItem(at: archiveURL) }
+            }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.item]) { result in
                 guard case .success(let url) = result else { return }
                 importRoll(url)
@@ -101,9 +110,10 @@ struct SettingsView: View {
         archiveURL = nil
         archiveStatus = "Packing the roll…"
         let folder = model.roll.folderURL
+        let stocks = try? JSONEncoder().encode(model.prefs.customStocks)
         Task {
             do {
-                let url = try await Task.detached(priority: .userInitiated) { try RollArchive.export(from: folder) }.value
+                let url = try await Task.detached(priority: .userInitiated) { try RollArchive.export(from: folder, stocks: stocks) }.value
                 archiveURL = url
                 let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
                 archiveStatus = "Ready (\(bytes(Int64(size)))). Tap Share roll file."
@@ -120,7 +130,11 @@ struct SettingsView: View {
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             do {
-                let added = try await Task.detached(priority: .userInitiated) { try RollArchive.importArchive(url, into: folder) }.value
+                let (added, stocks) = try await Task.detached(priority: .userInitiated) { try RollArchive.importArchive(url, into: folder) }.value
+                // Bring along stocks the roll was shot on that this phone doesn't have yet.
+                if let stocks, let customs = try? JSONDecoder().decode([CustomStock].self, from: stocks) {
+                    for c in customs where !model.prefs.customStocks.contains(where: { $0.id == c.id }) { model.prefs.save(c) }
+                }
                 model.roll.reload()
                 usage = model.roll.usage()
                 archiveStatus = added == 0 ? "Nothing new to add." : "Added \(added) files to the roll."
@@ -231,5 +245,65 @@ struct StockManagerView: View {
         } message: { Text("Paste a code someone shared with you (the whole message is fine).") }
         .navigationTitle("Stocks")
         .toolbar { EditButton() }
+    }
+}
+
+/// Frames that left the roll because their photo was deleted in the Photos app. They stay here until restored or
+/// deleted by hand — never automatically.
+struct RemovedFramesView: View {
+    @Environment(AppModel.self) private var model
+    @State private var frames: [(item: RollItem, removed: Date?)] = []
+    @State private var confirmDeleteAll = false
+    @State private var thumbs: [String: UIImage] = [:]
+
+    var body: some View {
+        List {
+            if frames.isEmpty {
+                Text("Nothing here. When you delete a Latent photo in the Photos app, its frame and negative come here instead of being lost.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            } else {
+                Section {
+                    Button("Restore all") { for f in frames { model.roll.restore(base: f.item.base) }; reload() }
+                    Button("Delete all permanently", role: .destructive) { confirmDeleteAll = true }
+                } footer: {
+                    Text("Restoring puts the frame and its negative back on the roll. It won't be in Photos again unless you save it.")
+                }
+                Section {
+                    ForEach(frames, id: \.item.base) { f in
+                        HStack(spacing: 12) {
+                            Group {
+                                if let t = thumbs[f.item.base] { Image(uiImage: t).resizable().scaledToFill() } else { Color.secondary.opacity(0.2) }
+                            }
+                            .frame(width: 54, height: 54).clipShape(RoundedRectangle(cornerRadius: 6))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(f.item.date.formatted(date: .abbreviated, time: .shortened))
+                                Text(f.removed.map { "Removed \($0.formatted(.relative(presentation: .named)))" } ?? "Removed")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Restore") { model.roll.restore(base: f.item.base); reload() }.buttonStyle(.borderless)
+                        }
+                        .swipeActions {
+                            Button("Delete", role: .destructive) { model.roll.deleteFromTrash(base: f.item.base); reload() }
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Removed with Photos")
+        .onAppear(perform: reload)
+        .confirmationDialog("Delete \(frames.count) frames and their negatives for good?", isPresented: $confirmDeleteAll, titleVisibility: .visible) {
+            Button("Delete permanently", role: .destructive) {
+                for f in frames { model.roll.deleteFromTrash(base: f.item.base) }
+                reload()
+            }
+        } message: { Text("This can't be undone.") }
+    }
+
+    private func reload() {
+        frames = model.roll.trashedFrames()
+        for f in frames where thumbs[f.item.base] == nil {
+            thumbs[f.item.base] = RollStore.downsample(f.item.url, maxPixel: 160)
+        }
     }
 }
