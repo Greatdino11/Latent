@@ -34,7 +34,7 @@ enum Finisher {
         let image = renderer(photo.size).image { ctx in
             UIImage(cgImage: cg).draw(in: photo)
             if dust { drawDust(ctx.cgContext, in: photo, short: short, rng: &local) }
-            if let date { drawDate(date, in: photo, short: short) }
+            if let date { drawDate(date, in: photo, short: short, context: ctx.cgContext, rng: &local) }
         }
         rng = local
         return image.cgImage ?? cg
@@ -255,18 +255,91 @@ enum Finisher {
             "inputBiasVector": mono ? CIVector(x: 1 - a / 2, y: 1 - a / 2, z: 1 - a / 2, w: 0) : CIVector(x: 0, y: 0, z: 0, w: 0)])
     }
 
-    private static func drawDate(_ date: Date, in photo: CGRect, short: CGFloat) {
+    /// The date as a film camera prints it: a small orange LCD in the camera back shines onto the film, so the
+    /// stamp is light added to the picture (bright on dark areas, faint on bright ones), in slanted seven-segment
+    /// digits with a red-orange halo, slightly soft and a little uneven. On a vertical frame it runs up the side,
+    /// as it would with the camera turned.
+    static func drawDate(_ date: Date, in photo: CGRect, short: CGFloat, context c: CGContext, rng: inout SeededRandom) {
         let f = DateFormatter(); f.dateFormat = "''yy MM dd"
-        let orange = UIColor(red: 1.0, green: 0.52, blue: 0.16, alpha: 0.92)
-        let shadow = NSShadow()
-        shadow.shadowColor = orange; shadow.shadowBlurRadius = short * 0.008; shadow.shadowOffset = .zero
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.monospacedDigitSystemFont(ofSize: short * 0.038, weight: .bold),
-            .foregroundColor: orange, .shadow: shadow, .kern: short * 0.004,
-        ]
-        let str = NSAttributedString(string: f.string(from: date), attributes: attrs)
-        let ts = str.size()
-        str.draw(at: CGPoint(x: photo.maxX - ts.width - short * 0.06, y: photo.maxY - ts.height - short * 0.05))
+        let text = f.string(from: date)
+        let h = short * 0.03, w = h * 0.52, t = h * 0.13, slant: CGFloat = 0.14
+        let pitch = w * 1.38, space = w * 0.95
+
+        // Lay out each character's path (digits as segments) in a box with the origin top-left, y down.
+        var glyphs: [CGPath] = []
+        var x: CGFloat = 0
+        for ch in text {
+            if ch == " " { x += space; continue }
+            let p = CGMutablePath()
+            if ch == "'" {
+                p.addPath(segment(CGPoint(x: x + t, y: h * 0.17), length: h * 0.3, thickness: t, vertical: true))
+                x += t * 3
+            } else if let d = ch.wholeNumberValue {
+                for seg in Self.segments[d] { p.addPath(digitSegment(seg, at: x, w: w, h: h, t: t)) }
+                x += pitch
+            }
+            // Italic slant, like LCD numerals.
+            var shear = CGAffineTransform(a: 1, b: 0, c: -slant, d: 1, tx: slant * h, ty: 0)
+            if let slanted = p.copy(using: &shear) { glyphs.append(slanted) }
+        }
+        let width = x
+
+        // Place it: bottom right, along the bottom on a landscape frame, up the right side on a vertical one.
+        let inset = short * 0.055
+        let place: CGAffineTransform
+        if photo.height > photo.width {
+            let x0 = photo.maxX - inset - h, yb = photo.maxY - inset
+            place = CGAffineTransform(a: 0, b: -1, c: 1, d: 0, tx: x0, ty: yb)
+        } else {
+            place = CGAffineTransform(translationX: photo.maxX - inset - width, y: photo.maxY - inset - h)
+        }
+
+        c.saveGState()
+        c.setBlendMode(.plusLighter)                          // light added to the film, never paint on top
+        c.concatenate(place)
+        for g in glyphs {
+            let level = CGFloat(rng.range(0.82...1.0))          // each digit a touch uneven
+            // Wide red-orange halo (halation around the exposed digits).
+            c.setShadow(offset: .zero, blur: short * 0.016, color: UIColor(red: 1, green: 0.2, blue: 0.02, alpha: 1.0 * level).cgColor)
+            c.setFillColor(UIColor(red: 0.95, green: 0.18, blue: 0.02, alpha: 0.5 * level).cgColor)
+            c.addPath(g); c.fillPath()
+            // Soft orange core, slightly out of focus.
+            c.setShadow(offset: .zero, blur: short * 0.0032, color: UIColor(red: 1, green: 0.36, blue: 0.08, alpha: 0.9 * level).cgColor)
+            c.setFillColor(UIColor(red: 1, green: 0.4, blue: 0.1, alpha: 0.62 * level).cgColor)
+            c.addPath(g); c.fillPath()
+        }
+        c.restoreGState()
+    }
+
+    /// Which of the seven segments (a top, b upper right, c lower right, d bottom, e lower left, f upper left,
+    /// g middle) each digit lights.
+    private static let segments: [[Character]] = [
+        ["a", "b", "c", "d", "e", "f"], ["b", "c"], ["a", "b", "g", "e", "d"], ["a", "b", "g", "c", "d"], ["f", "g", "b", "c"],
+        ["a", "f", "g", "c", "d"], ["a", "f", "g", "e", "d", "c"], ["a", "b", "c"], ["a", "b", "c", "d", "e", "f", "g"], ["a", "b", "c", "d", "f", "g"],
+    ]
+
+    private static func digitSegment(_ s: Character, at x: CGFloat, w: CGFloat, h: CGFloat, t: CGFloat) -> CGPath {
+        let gap = t * 0.28, half = h / 2
+        let hl = w - t - gap * 2, vl = half - t * 0.5 - gap * 2
+        switch s {
+        case "a": return segment(CGPoint(x: x + w / 2, y: t / 2), length: hl, thickness: t, vertical: false)
+        case "g": return segment(CGPoint(x: x + w / 2, y: half), length: hl, thickness: t, vertical: false)
+        case "d": return segment(CGPoint(x: x + w / 2, y: h - t / 2), length: hl, thickness: t, vertical: false)
+        case "f": return segment(CGPoint(x: x + t / 2, y: half / 2 + t / 4), length: vl, thickness: t, vertical: true)
+        case "b": return segment(CGPoint(x: x + w - t / 2, y: half / 2 + t / 4), length: vl, thickness: t, vertical: true)
+        case "e": return segment(CGPoint(x: x + t / 2, y: half + half / 2 - t / 4), length: vl, thickness: t, vertical: true)
+        default:  return segment(CGPoint(x: x + w - t / 2, y: half + half / 2 - t / 4), length: vl, thickness: t, vertical: true)   // c
+        }
+    }
+
+    /// One LCD segment: a bar with pointed ends.
+    private static func segment(_ c: CGPoint, length l: CGFloat, thickness t: CGFloat, vertical: Bool) -> CGPath {
+        let p = CGMutablePath(), a = l / 2, b = t / 2
+        let pts = [CGPoint(x: -a, y: 0), CGPoint(x: -a + b, y: -b), CGPoint(x: a - b, y: -b),
+                   CGPoint(x: a, y: 0), CGPoint(x: a - b, y: b), CGPoint(x: -a + b, y: b)]
+            .map { vertical ? CGPoint(x: c.x + $0.y, y: c.y + $0.x) : CGPoint(x: c.x + $0.x, y: c.y + $0.y) }
+        p.addLines(between: pts); p.closeSubpath()
+        return p
     }
 
     /// Specks of dust (mostly bright, like dust on a scanned negative), a few hairs and sometimes a faint scratch.
