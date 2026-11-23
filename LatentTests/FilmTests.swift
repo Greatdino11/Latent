@@ -745,3 +745,47 @@ final class StockSnapshotTests: XCTestCase {
         XCTAssertEqual(back.customStock, mine)
     }
 }
+
+final class LensRoutingTests: XCTestCase {
+    private func pick(_ zoom: CGFloat, hiRes: Bool = false, physical: Bool = false, has48: Bool = true) -> CameraController.LensCamera {
+        CameraController.lensCamera(lensZoom: zoom, baseZoom: 2, highResolution: hiRes, mainHas48: has48, needsPhysical: physical,
+                                    hasUltraWide: true, hasTele: true)
+    }
+
+    func testRoutesToTheRightCamera() {
+        XCTAssertEqual(pick(2), .virtual, "plain shooting keeps the smooth combined camera")
+        XCTAssertEqual(pick(2, hiRes: true), .main, "48MP at 1× needs the main camera on its own")
+        XCTAssertEqual(pick(2, hiRes: true, has48: false), .virtual)
+        XCTAssertEqual(pick(6, hiRes: true), .virtual, "48MP only exists at 1×")
+        XCTAssertEqual(pick(1, physical: true), .ultraWide, "ZERO / slow shutter at .5×")
+        XCTAssertEqual(pick(2, physical: true), .main)
+        XCTAssertEqual(pick(6, physical: true), .tele)
+        XCTAssertEqual(pick(4, physical: true), .main, "a 2× crop of the main camera stays on it")
+    }
+}
+
+final class RollStoreFlowTests: XCTestCase {
+    func testAddThenRedevelopOnAnotherStock() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let roll = RollStore(folder: dir)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var o = DevelopOptions(); o.date = Date(timeIntervalSince1970: 1_800_000_000); o.grainAmount = 1.5
+        let item = try roll.add(DevelopResult(jpeg: Data([1, 2, 3]), negative: Data([9]), options: o, depth: nil), stock: .honey)
+        XCTAssertEqual(roll.items.map(\.id), [item.id])
+        XCTAssertTrue(item.hasNegative)
+        XCTAssertEqual(roll.recipe(for: item).grainAmount, 1.5)
+
+        // A second frame at the same instant never overwrites the first.
+        let twin = try roll.add(DevelopResult(jpeg: Data([4]), negative: Data([8]), options: o, depth: nil), stock: .honey)
+        XCTAssertNotEqual(twin.id, item.id)
+
+        var changed = roll.recipe(for: item); changed.grainAmount = 0.5
+        let updated = try roll.replace(item, stock: .coast, jpeg: Data([7, 7]), options: changed)
+        XCTAssertEqual(updated.stockID, "coast")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: item.url.path), "old print removed")
+        XCTAssertEqual(try Data(contentsOf: updated.url), Data([7, 7]))
+        XCTAssertEqual(roll.recipe(for: updated).grainAmount, 0.5)
+        XCTAssertTrue(updated.hasNegative, "the negative is untouched")
+        XCTAssertGreaterThan(updated.stamp, item.stamp)
+    }
+}

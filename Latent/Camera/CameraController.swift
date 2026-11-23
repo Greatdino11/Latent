@@ -63,7 +63,11 @@ final class CameraController: NSObject {
     @ObservationIgnored private var device: AVCaptureDevice?
     @ObservationIgnored private var rotation: AVCaptureDevice.RotationCoordinator?
     @ObservationIgnored private var inFlight: [Int64: PhotoDelegate] = [:]
-    @ObservationIgnored private var configured = false
+    @ObservationIgnored private var configured = false            // camera queue only
+    /// Main-thread view of `configured` (set once the first setup is applied).
+    @ObservationIgnored private var isConfigured = false
+    /// The longest single-frame exposure on the current camera, published from the camera queue.
+    private(set) var maxSingleExposure: Double = 1
     @ObservationIgnored private var wantsRunning = true
     @ObservationIgnored private var wantsPortrait = false
     @ObservationIgnored private var wantsHighResolution = false
@@ -94,7 +98,7 @@ final class CameraController: NSObject {
         hasFrontCamera = true
         return
         #else
-        if configured { setRunning(true); return }
+        if isConfigured { setRunning(true); return }
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized: break
         case .notDetermined:
@@ -115,19 +119,23 @@ final class CameraController: NSObject {
     @MainActor func startMetering() {
         guard meterTimer == nil else { return }
         meterTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
+            // Read the device on the camera queue (where it's changed), publish on the main thread.
+            self?.queue.async {
                 guard let self, let d = self.device else { return }
                 let m = Meter(shutter: d.exposureDuration.seconds, iso: d.iso, offset: d.exposureTargetOffset)
                 // Paused or restarting cameras report NaN: keep the last good reading.
                 guard m.shutter.isFinite, m.shutter > 0, m.iso.isFinite, m.offset.isFinite else { return }
-                // Only publish real changes, so the viewfinder doesn't redraw for nothing.
-                if abs(m.offset - self.meter.offset) > 0.05 || abs(m.shutter - self.meter.shutter) / max(self.meter.shutter, 1e-6) > 0.05
-                    || abs(m.iso - self.meter.iso) > 2 { self.meter = m }
+                Task { @MainActor in
+                    // Only publish real changes, so the viewfinder doesn't redraw for nothing.
+                    if abs(m.offset - self.meter.offset) > 0.05 || abs(m.shutter - self.meter.shutter) / max(self.meter.shutter, 1e-6) > 0.05
+                        || abs(m.iso - self.meter.iso) > 2 { self.meter = m }
+                }
             }
         }
     }
 
     @MainActor private func apply(_ setup: Setup) {
+        if setup.ok { isConfigured = true }
         lenses = setup.lenses; selectedLens = setup.selected; hasFlash = setup.flash; depthSupported = setup.depth
         aeafLocked = false
     }
@@ -136,7 +144,7 @@ final class CameraController: NSObject {
     @MainActor @discardableResult
     func setPortrait(_ on: Bool) async -> Bool {
         if isSimulated { return on }
-        guard configured else { wantsPortrait = on; return false }
+        guard isConfigured else { queue.async { self.wantsPortrait = on }; return false }
         // On the back, the combined triple camera has no depth: portrait swaps to a depth-capable camera
         // (dual-wide, dual or LiDAR) and back again, so the session is rebuilt either way.
         if position == .back {
@@ -186,6 +194,7 @@ final class CameraController: NSObject {
             dev.videoZoomFactor = min(max(zoom, dev.minAvailableVideoZoomFactor), dev.maxAvailableVideoZoomFactor)
             dev.unlockForConfiguration()
         }
+        noteDevice()
         return photoOutput.isDepthDataDeliveryEnabled
     }
 
@@ -218,17 +227,18 @@ final class CameraController: NSObject {
     @discardableResult
     private func routeForResolution() -> Bool {
         guard configured, !wantsPortrait, let virtual = virtualDevice, let main = mainCamera, let current = device else { return false }
-        let atBase = abs(lensZoom - baseZoom) < 0.01
-        let wantMain = wantsHighResolution && atBase
-            && main.formats.contains { $0.supportedMaxPhotoDimensions.contains { Int($0.width) * Int($0.height) > 40_000_000 } }
-        // Process Zero needs a single physical camera too (virtual devices don't deliver Bayer RAW): the one behind
-        // the chosen lens.
-        var target = wantMain ? main : virtual
-        if wantsZero || wantsSlowShutter {
-            if lensZoom < baseZoom - 0.01, let uw = ultraWideCamera { target = uw }
-            else if lensZoom > baseZoom * 2.5, let tele = teleCamera { target = tele }
-            else { target = main }
+        let mainHas48 = main.formats.contains { $0.supportedMaxPhotoDimensions.contains { Int($0.width) * Int($0.height) > 40_000_000 } }
+        let choice = Self.lensCamera(lensZoom: lensZoom, baseZoom: baseZoom, highResolution: wantsHighResolution, mainHas48: mainHas48,
+                                     needsPhysical: wantsZero || wantsSlowShutter,
+                                     hasUltraWide: ultraWideCamera != nil, hasTele: teleCamera != nil)
+        let target: AVCaptureDevice
+        switch choice {
+        case .virtual: target = virtual
+        case .main: target = main
+        case .ultraWide: target = ultraWideCamera ?? main
+        case .tele: target = teleCamera ?? main
         }
+        let wantMain = choice == .main && wantsHighResolution
         guard target.uniqueID != current.uniqueID, let newInput = try? AVCaptureDeviceInput(device: target) else { return false }
         session.beginConfiguration()
         if let input { session.removeInput(input) }
@@ -239,6 +249,7 @@ final class CameraController: NSObject {
         session.addInput(newInput)
         input = newInput
         device = target
+        noteDevice()
         if wantMain && !wantsZero { Self.useHighResolutionFormat(target) } else if session.canSetSessionPreset(.photo) { session.sessionPreset = .photo }
         photoOutput.isAppleProRAWEnabled = photoOutput.isAppleProRAWSupported && !wantsZero
         pickPhotoDimensions(target)
@@ -254,6 +265,21 @@ final class CameraController: NSObject {
         }
         Task { @MainActor in self.aeafLocked = false }
         return true
+    }
+
+    enum LensCamera: Equatable { case virtual, main, ultraWide, tele }
+
+    /// Which camera should be in the session. The combined (virtual) camera switches lenses smoothly but stops at
+    /// 12MP and won't give single-frame RAW or manual exposure; those need the physical camera behind the lens.
+    static func lensCamera(lensZoom: CGFloat, baseZoom: CGFloat, highResolution: Bool, mainHas48: Bool, needsPhysical: Bool,
+                           hasUltraWide: Bool, hasTele: Bool) -> LensCamera {
+        let atBase = abs(lensZoom - baseZoom) < 0.01
+        if needsPhysical {
+            if lensZoom < baseZoom - 0.01, hasUltraWide { return .ultraWide }
+            if lensZoom > baseZoom * 2.5, hasTele { return .tele }
+            return .main
+        }
+        return highResolution && atBase && mainHas48 ? .main : .virtual
     }
 
     /// The zoom to set for the chosen lens on whichever camera is in the session: the virtual camera zooms between
@@ -274,10 +300,12 @@ final class CameraController: NSObject {
     }
 
     /// The longest exposure one frame can take on the current camera.
-    var maxSingleExposure: Double {
-        guard let d = device else { return 1 }
+    /// Camera queue. Publishes facts about the current camera that the main thread needs.
+    private func noteDevice() {
+        guard let d = device else { return }
         let minFps = d.activeFormat.videoSupportedFrameRateRanges.map(\.minFrameRate).min() ?? 1
-        return min(d.activeFormat.maxExposureDuration.seconds, 1 / max(minFps, 0.5))
+        let longest = min(d.activeFormat.maxExposureDuration.seconds, 1 / max(minFps, 0.5))
+        Task { @MainActor in self.maxSingleExposure = longest.isFinite && longest > 0 ? longest : 1 }
     }
 
     /// Camera queue. Holds the shutter at `seconds`, raising or lowering ISO to keep the metered brightness (as far
@@ -451,9 +479,9 @@ final class CameraController: NSObject {
 
     /// Starts or stops the sensor (stopped while the roll or settings cover the viewfinder, and in the background).
     func setRunning(_ running: Bool) {
-        wantsRunning = running
-        guard configured else { return }
         queue.async {
+            self.wantsRunning = running
+            guard self.configured else { return }
             if running {
                 self.stopWhenIdle = false
                 if !self.session.isRunning { self.session.startRunning() }
@@ -484,7 +512,7 @@ final class CameraController: NSObject {
     func flip() async {
         let target: AVCaptureDevice.Position = position == .back ? .front : .back
         if isSimulated { position = target; return }
-        guard configured else { return }
+        guard isConfigured else { return }
         let setup: Setup = await withCheckedContinuation { cont in
             queue.async { cont.resume(returning: self.configure(position: target)) }
         }
@@ -536,6 +564,7 @@ final class CameraController: NSObject {
 
         device = dev
         rotation = AVCaptureDevice.RotationCoordinator(device: dev, previewLayer: nil)
+        noteDevice()
 
         // Lenses: a virtual device exposes switch-over zoom factors for each physical camera.
         var lenses = [LensOption(id: 0, label: "1", zoomFactor: 1)]

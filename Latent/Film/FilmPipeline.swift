@@ -393,10 +393,15 @@ enum FilmPipeline {
         var out = base
         for layer in layers {
             // Blurred uniform noise has std ≈ 0.078 / σ (measured). Layer centred on 0.5 for Linear Light.
-            let sigma = max(0.6, 0.55 * size * layer.scale)
+            // The coarse layer is made at half size and scaled up (a quarter of the memory at 48MP); its blur is
+            // measured in those half-size pixels.
+            let coarse = layer.scale > 1.5
+            let k: CGFloat = coarse ? 2 : 1
+            let sigma = max(0.6, 0.55 * size * layer.scale / k)
             let h = CGFloat(target * layer.share * Double(sigma) / 0.078) / 2
+            let region = coarse ? CGRect(x: padded.minX / 2, y: padded.minY / 2, width: padded.width / 2, height: padded.height / 2).integral : padded
             let m = CIFilter.colorMatrix()
-            m.inputImage = whiteNoise(covering: padded)
+            m.inputImage = whiteNoise(covering: region)
             if stock.isMonochrome {
                 let v = CIVector(x: h, y: 0, z: 0, w: 0)
                 m.rVector = v; m.gVector = v; m.bVector = v
@@ -409,7 +414,8 @@ enum FilmPipeline {
             m.aVector = CIVector(x: 0, y: 0, z: 0, w: 0)
             let bias = 0.5 - 0.5 * h
             m.biasVector = CIVector(x: bias, y: bias, z: bias, w: 1)
-            guard let raw = m.outputImage?.applyingGaussianBlur(sigma: sigma).cropped(to: extent) else { continue }
+            guard let blurred = m.outputImage?.applyingGaussianBlur(sigma: sigma) else { continue }
+            let raw = (coarse ? blurred.transformed(by: CGAffineTransform(scaleX: k, y: k)) : blurred).cropped(to: extent)
             // Fade the layer towards neutral (0.5) where the tone carries little grain.
             let shaped = raw.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: mid, kCIInputMaskImageKey: weight])
             let blend = CIFilter.linearLightBlendMode()

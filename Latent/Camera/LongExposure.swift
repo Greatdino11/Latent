@@ -66,9 +66,12 @@ final class FrameStacker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         let e = frame.extent
         if buffers.isEmpty {
             let attrs: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary]
-            for _ in 0..<4 {
+            // Even slots hold the running sum in 32-bit float (half floats drift after hundreds of frames); odd
+            // slots hold the per-pixel maximum, where half precision is plenty.
+            for slot in 0..<4 {
                 var b: CVPixelBuffer?
-                CVPixelBufferCreate(nil, Int(e.width), Int(e.height), kCVPixelFormatType_64RGBAHalf, attrs as CFDictionary, &b)
+                let format = slot % 2 == 0 ? kCVPixelFormatType_128RGBAFloat : kCVPixelFormatType_64RGBAHalf
+                CVPixelBufferCreate(nil, Int(e.width), Int(e.height), format, attrs as CFDictionary, &b)
                 guard let b else { fail(CameraError.noData); return }
                 buffers.append(b)
             }
