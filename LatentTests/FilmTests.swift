@@ -727,3 +727,21 @@ final class PhotosSyncPlanTests: XCTestCase {
         XCTAssertEqual(plan.restore, ["9"])
     }
 }
+
+final class StockSnapshotTests: XCTestCase {
+    func testFramesKeepTheirOwnCopyOfACustomStock() throws {
+        var mine = CustomStock(); mine.id = "custom-snaptest"; mine.baseID = "coast"; mine.warmth = 0.5
+        var recipe = DevelopOptions(); recipe.customStock = mine
+        // The stock is no longer installed (deleted): the frame's own copy is used.
+        let resolved = try XCTUnwrap(DevelopOptions.resolveStock(stockID: "custom-snaptest", recipe: recipe))
+        XCTAssertEqual(resolved.id, "custom-snaptest")
+        XCTAssertEqual(resolved.temperature, mine.stock.temperature)
+        // No copy and not installed: reported as missing (never silently swapped for another stock).
+        XCTAssertNil(DevelopOptions.resolveStock(stockID: "custom-gone", recipe: DevelopOptions()))
+        // Built-in stocks resolve by id.
+        XCTAssertEqual(DevelopOptions.resolveStock(stockID: "honey", recipe: DevelopOptions())?.id, "honey")
+        // The copy survives the recipe's JSON round trip.
+        let back = try JSONDecoder().decode(DevelopOptions.self, from: JSONEncoder().encode(recipe))
+        XCTAssertEqual(back.customStock, mine)
+    }
+}

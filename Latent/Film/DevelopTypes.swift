@@ -87,6 +87,9 @@ struct DevelopOptions: Codable {
     var fullResolution: Bool? = nil
     /// Process Zero: one unmerged sensor frame, developed without noise reduction (its own noise is the grain).
     var processZero: Bool? = nil
+    /// A copy of the user's own stock this frame was printed on, so re-developing it later uses the same stock even
+    /// after that stock is edited or deleted (built-in stocks are looked up by id).
+    var customStock: CustomStock? = nil
     /// The capture's ISO (from its metadata), so grain can back off where the sensor's own noise already shows.
     var iso: Double? = nil
     /// CRISP detail: half the stock's lens softness and colour fringing, for a sharper, modern-scan look.
@@ -157,10 +160,20 @@ struct DevelopResult {
     var depth: Data? = nil
 }
 
+extension DevelopOptions {
+    /// The stock to re-develop a frame on: its own saved copy first (so later edits to that stock don't change old
+    /// frames), else the stock with that id (built-in, or a custom one still around). nil means it's gone.
+    static func resolveStock(stockID: String, recipe: DevelopOptions) -> FilmStock? {
+        if let snap = recipe.customStock, snap.id == stockID { return snap.stock }
+        return FilmStock.with(id: stockID)
+    }
+}
+
 enum DarkroomError: LocalizedError {
-    case decode, render, encode
+    case decode, render, encode, missingStock
     var errorDescription: String? {
         switch self {
+        case .missingStock: "This frame's stock was deleted, so it can't be re-developed as it was. Pick another stock in FILM."
         case .decode: "Couldn't read the photo."
         case .render: "Couldn't develop the photo."
         case .encode: "Couldn't save the photo."

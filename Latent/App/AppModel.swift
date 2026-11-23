@@ -149,6 +149,7 @@ final class AppModel {
             date: Date()
         )
         o.strength = prefs.strength(for: stock)
+        o.customStock = snapshot(of: stock)
         if prefs.highResolution && !prefs.zeroProcess { o.fullResolution = true }
         if prefs.lightLeak > 0 { o.lightLeak = prefs.lightLeak }
         if portrait { o.portraitLens = prefs.portraitLens; o.blurAmount = prefs.blurAmount }
@@ -337,15 +338,28 @@ final class AppModel {
 
     // MARK: re-developing
 
-    /// Prints a frame's negative again: on another stock, with an edit (push/pull, strength, framing), or as-is to
-    /// pick up new texture settings. Grain, halation and flare always come from the current settings.
+    /// The stock a frame was printed on (its saved copy for the user's own stocks); nil if that stock is gone.
+    func stock(for item: RollItem) -> FilmStock? {
+        DevelopOptions.resolveStock(stockID: item.stockID, recipe: roll.recipe(for: item))
+    }
+
+    /// A copy of `stock` to keep in a recipe, when it's one of the user's own.
+    func snapshot(of stock: FilmStock) -> CustomStock? { prefs.customStocks.first { $0.id == stock.id } }
+
+    /// Prints a frame's negative again: on another stock (`stock`), or on its own with an edit (push/pull,
+    /// strength, framing, texture). The frame keeps its own settings unless the edit changes them.
     /// If the frame was saved to Photos, that copy is updated in place. Returns a status line.
     @discardableResult
-    func reprint(_ item: RollItem, stock: FilmStock? = nil, edit: (inout DevelopOptions) -> Void = { _ in }) async throws -> String {
-        let stock = stock ?? item.stock ?? .clear
+    func reprint(_ item: RollItem, stock newStock: FilmStock? = nil, edit: (inout DevelopOptions) -> Void = { _ in }) async throws -> String {
+        var options = roll.recipe(for: item)
+        let changing = newStock.map { $0.id != item.stockID } ?? false
+        guard let stock = changing ? newStock : DevelopOptions.resolveStock(stockID: item.stockID, recipe: options) else {
+            throw DarkroomError.missingStock
+        }
         let negative = try Data(contentsOf: item.negativeURL)
-        var options = roll.recipe(for: item)      // keeps the frame's own grain, halation and flare
-        if stock.id != item.stockID { options.strength = prefs.strength(for: stock) }
+        if changing { options.strength = prefs.strength(for: stock) }
+        // Keep a copy of the user's own stock with the frame (also fills it in for frames from before copies).
+        if changing || options.customStock == nil { options.customStock = snapshot(of: stock) }
         edit(&options)
         let metadata = JPEGEncoder.metadata(of: item.url)
         let depth = try? Data(contentsOf: item.depthURL)
@@ -378,7 +392,7 @@ final class AppModel {
     func doubleExposure(_ a: RollItem, _ b: RollItem, balance: Double = 0.5) async throws -> RollItem {
         let na = try Data(contentsOf: a.negativeURL), nb = try Data(contentsOf: b.negativeURL)
         let ra = roll.recipe(for: a), rb = roll.recipe(for: b)
-        let stock = a.stock ?? .clear
+        guard let stock = stock(for: a) else { throw DarkroomError.missingStock }
         let options = doubleExposureOptions(base: a)
         let result = try await Darkroom.shared.doubleExposure(na, ra, nb, rb, balance: balance, stock: stock, options: options,
                                                              metadata: JPEGEncoder.metadata(of: a.url))
@@ -399,14 +413,15 @@ final class AppModel {
         var frames: [ContactSheet.Frame] = []
         for (i, item) in ordered.enumerated() {
             progress(i + 1, ordered.count)
-            let stock = item.stock ?? .clear
+            // A frame whose stock is gone shows its existing print rather than being re-printed on another stock.
+            let stock = self.stock(for: item)
             var image: CGImage?, mark: CGRect?
-            if item.hasNegative, let neg = try? Data(contentsOf: item.negativeURL),
+            if let stock, item.hasNegative, let neg = try? Data(contentsOf: item.negativeURL),
                let made = try? await Darkroom.shared.contactFrame(negative: neg, recipe: roll.recipe(for: item), stock: stock, maxPixel: 900) {
                 (image, mark) = made
             }
             if image == nil { image = await roll.thumbnail(for: item, maxPixel: 900)?.cgImage }
-            if let image { frames.append(.init(image: image, number: i + 1, stock: stock.displayName, mark: mark)) }
+            if let image { frames.append(.init(image: image, number: i + 1, stock: stock?.displayName ?? "", mark: mark)) }
         }
         let f = DateFormatter(); f.dateFormat = "d MMM yyyy"
         let days = Set(ordered.map { f.string(from: $0.date) })

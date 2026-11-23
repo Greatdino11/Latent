@@ -537,7 +537,7 @@ private struct PhotoPager: View {
 
     private func caption(_ item: RollItem) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(item.stock?.displayName.uppercased() ?? item.stockID.uppercased())
+            Text(model.stock(for: item)?.displayName.uppercased() ?? "STOCK DELETED")
                 .font(Theme.mono(13, .bold)).foregroundStyle(Theme.amber)
                 .lineLimit(1).minimumScaleFactor(0.7)
             Spacer(minLength: 8)
@@ -780,7 +780,8 @@ private struct PhotoPager: View {
         if developing { dirty = true; return }
         developing = true
         dirty = false
-        let stock = FilmStock.with(id: stockID) ?? item.stock
+        // Same stock: let reprint use the frame's own (saved copy of a custom stock). New stock: that one.
+        let stock: FilmStock? = stockID == item.stockID ? nil : FilmStock.with(id: stockID)
         let (s, p, a, d, b) = (strength, push, aspect, dateStamp, border)
         let cs = cropShift
         let (lk, du) = (leak, dust)
@@ -808,7 +809,7 @@ private struct PhotoPager: View {
     /// Lays the print out as a 4:5 post or 9:16 story and opens the share sheet.
     private func shareSocial(_ item: RollItem, _ format: SocialPrint.Format) {
         let border = model.roll.recipe(for: item).frame
-        let stock = item.stock?.displayName ?? ""
+        let stock = model.stock(for: item)?.displayName ?? ""
         status = "Preparing…"
         Task {
             let url = await Task.detached(priority: .userInitiated) { () -> URL? in
@@ -979,7 +980,7 @@ private struct DoubleExposureView: View {
         let (ra, rb) = (model.roll.recipe(for: base), model.roll.recipe(for: top))
         let options = model.doubleExposureOptions(base: base)
         if let cg = try? await Darkroom.shared.doubleExposurePreview(na, ra, nb, rb, balance: balance,
-                                                                       stock: base.stock ?? .clear, options: options),
+                                                                       stock: model.stock(for: base) ?? .clear, options: options),
            !Task.isCancelled {
             preview = UIImage(cgImage: cg)
         }
