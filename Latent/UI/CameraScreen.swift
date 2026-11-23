@@ -166,7 +166,7 @@ private struct TopBar: View {
                 .accessibilityLabel("Switch camera")
             }
             Button { showSettings = true } label: { Image(systemName: "gearshape").rotationEffect(turn) }
-                .disabled(model.exposing != nil)
+                .disabled(model.captureBusy)
         }
         .animation(.snappy, value: turn)
         .font(.system(size: 17))

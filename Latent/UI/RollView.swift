@@ -997,8 +997,9 @@ private struct DoubleExposureView: View {
         defer { rendering = false }
         let (ra, rb) = (model.roll.recipe(for: base), model.roll.recipe(for: top))
         let options = model.doubleExposureOptions(base: base)
+        guard let stock = model.stock(for: base) else { error = DarkroomError.missingStock.localizedDescription; return }
         if let cg = try? await Darkroom.shared.doubleExposurePreview(na, ra, nb, rb, balance: balance,
-                                                                       stock: model.stock(for: base) ?? .clear, options: options),
+                                                                       stock: stock, options: options),
            !Task.isCancelled {
             preview = UIImage(cgImage: cg)
         }

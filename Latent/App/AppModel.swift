@@ -187,7 +187,7 @@ final class AppModel {
         developingCount += 1
         defer { developingCount -= 1 }
         do {
-            let shutter = prefs.shutter
+            let shutter = portrait ? 0 : prefs.shutter      // portrait captures normally (as its notice says)
             let frame: CapturedFrame
             if shutter > camera.maxSingleExposure + 0.001 {
                 // Longer than one frame can expose: stack frames for the whole time.
@@ -270,7 +270,13 @@ final class AppModel {
                 Feedback.advance()
                 if (pano?.scenes.count ?? 0) >= Panorama.maxFrames { finishPanorama() }
             } catch {
-                pano?.capturing = false
+                if pano?.scenes.isEmpty == true {
+                    // Nothing taken yet: leave panorama-in-progress (and its locks) rather than strand the camera.
+                    pano = nil
+                    camera.lockForPanorama(false)
+                } else {
+                    pano?.capturing = false
+                }
                 errorMessage = error.localizedDescription
             }
         }

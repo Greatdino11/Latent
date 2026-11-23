@@ -89,6 +89,8 @@ struct Viewfinder: View {
                 }
         case .running:
             CameraPreview(session: model.camera.session, onTap: { layer, device in
+                // A panorama's locked exposure or a long exposure's manual settings mustn't be reset by a tap.
+                guard !model.captureBusy else { return }
                 model.camera.focus(at: device)
                 focusPoint = layer
                 Task { try? await Task.sleep(for: .seconds(1.2)); focusPoint = nil }
@@ -96,6 +98,7 @@ struct Viewfinder: View {
                 guard !model.captureBusy else { return }
                 Task { await model.camera.flip() }
             }, onLongPress: { layer, device in
+                guard !model.captureBusy else { return }
                 model.camera.lock(at: device)
                 focusPoint = layer
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
