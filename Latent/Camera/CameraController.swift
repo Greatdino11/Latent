@@ -17,8 +17,14 @@ enum FlashSetting: String, CaseIterable {
 }
 
 enum CameraError: LocalizedError {
-    case unavailable, noData
-    var errorDescription: String? { self == .unavailable ? "The camera isn't available." : "The camera returned no image." }
+    case unavailable, noData, stopped
+    var errorDescription: String? {
+        switch self {
+        case .unavailable: "The camera isn't available."
+        case .noData: "The camera returned no image."
+        case .stopped: "The exposure stopped before any light was collected."
+        }
+    }
 }
 
 /// Owns the AVCaptureSession. On the simulator (no camera) it serves a generated test scene instead.
@@ -43,8 +49,12 @@ final class CameraController: NSObject {
     private(set) var meter = Meter(shutter: 1.0 / 125, iso: 100, offset: 0)
     @ObservationIgnored private var meterTimer: Timer?
 
+    /// The session is actually delivering frames (not paused behind the roll or in the background).
+    private(set) var sessionRunning = false
+    @ObservationIgnored private var stopWhenIdle = false
+
     var isSimulated: Bool { status == .simulated }
-    var isReady: Bool { status == .running || status == .simulated }
+    var isReady: Bool { (status == .running && sessionRunning) || status == .simulated }
 
     @ObservationIgnored let session = AVCaptureSession()
     @ObservationIgnored private let queue = DispatchQueue(label: "latent.camera")
@@ -272,12 +282,13 @@ final class CameraController: NSObject {
 
     /// Camera queue. Holds the shutter at `seconds`, raising or lowering ISO to keep the metered brightness (as far
     /// as the sensor's ISO range allows), and calls back once frames are exposed that way.
-    private func holdShutter(_ seconds: Double, then done: @escaping () -> Void) {
-        guard let d = device, d.isExposureModeSupported(.custom), (try? d.lockForConfiguration()) != nil else { done(); return }
+    /// Returns the device it set, so the same one is released afterwards.
+    private func holdShutter(_ seconds: Double, then done: @escaping (AVCaptureDevice?) -> Void) {
+        guard let d = device, d.isExposureModeSupported(.custom), (try? d.lockForConfiguration()) != nil else { done(nil); return }
         let duration = CMTime(seconds: min(seconds, d.activeFormat.maxExposureDuration.seconds), preferredTimescale: 1_000_000)
         if duration > d.activeVideoMaxFrameDuration { d.activeVideoMaxFrameDuration = duration }
         let iso = Float(Self.meteredProduct(d) / duration.seconds).clamped(d.activeFormat.minISO, d.activeFormat.maxISO)
-        d.setExposureModeCustom(duration: duration, iso: iso) { _ in done() }
+        d.setExposureModeCustom(duration: duration, iso: iso) { _ in done(d) }
         d.unlockForConfiguration()
     }
 
@@ -289,8 +300,9 @@ final class CameraController: NSObject {
     }
 
     /// Camera queue. Back to automatic exposure and normal frame rates after a manual shutter.
-    private func releaseShutter() {
-        guard let d = device, (try? d.lockForConfiguration()) != nil else { return }
+    /// `device`: the one that was set manual (whichever camera is current now).
+    private func releaseShutter(_ held: AVCaptureDevice? = nil) {
+        guard let d = held ?? device, (try? d.lockForConfiguration()) != nil else { return }
         d.activeVideoMinFrameDuration = .invalid
         d.activeVideoMaxFrameDuration = .invalid
         if d.isExposureModeSupported(.continuousAutoExposure) { d.exposureMode = .continuousAutoExposure }
@@ -315,7 +327,9 @@ final class CameraController: NSObject {
                         if let out = self.stackOutput { self.session.removeOutput(out) }
                         self.stackOutput = nil
                         self.session.commitConfiguration()
-                        self.releaseShutter()
+                        self.releaseShutter(d)
+                        self.inFlightStack = nil
+                        self.stopIfIdle()
                         cont.resume(with: result.map { ($0.sum, $0.max, $0.count) })
                     }
                 }
@@ -360,7 +374,6 @@ final class CameraController: NSObject {
                 self.stackQueue.asyncAfter(deadline: .now() + seconds + 6) { stacker.fail(CameraError.noData) }
             }
         }
-        inFlightStack = nil
         var meta: [String: Any] = [:]
         meta[kCGImagePropertyExifDictionary as String] = [kCGImagePropertyExifExposureTime as String: seconds]
         let image = LongExposure.blend(sum: sum, max: peak, count: count, trails: trails)
@@ -381,8 +394,17 @@ final class CameraController: NSObject {
                 if d.isExposureModeSupported(.continuousAutoExposure) { d.exposureMode = .continuousAutoExposure }
                 if d.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) { d.whiteBalanceMode = .continuousAutoWhiteBalance }
                 if d.isFocusModeSupported(.continuousAutoFocus) { d.focusMode = .continuousAutoFocus }
+                Task { @MainActor in self.aeafLocked = false }
             }
             d.unlockForConfiguration()
+        }
+    }
+
+    /// Ends a running long exposure now, keeping what's been exposed so far.
+    func finishExposureEarly() {
+        queue.async {
+            guard let stacker = self.inFlightStack else { return }
+            self.stackQueue.async { stacker.finishNow() }
         }
     }
 
@@ -432,9 +454,29 @@ final class CameraController: NSObject {
         wantsRunning = running
         guard configured else { return }
         queue.async {
-            if running, !self.session.isRunning { self.session.startRunning() }
-            if !running, self.session.isRunning { self.session.stopRunning() }
+            if running {
+                self.stopWhenIdle = false
+                if !self.session.isRunning { self.session.startRunning() }
+            } else if self.session.isRunning {
+                // Never pull the sensor out from under a photo or long exposure still being taken: stop once done.
+                if !self.inFlight.isEmpty || self.stackOutput != nil { self.stopWhenIdle = true } else { self.session.stopRunning() }
+            }
+            self.noteRunning()
         }
+    }
+
+    /// Camera queue. Stops the session if a stop was put off until the last capture finished.
+    private func stopIfIdle() {
+        guard stopWhenIdle, inFlight.isEmpty, stackOutput == nil else { return }
+        stopWhenIdle = false
+        if !wantsRunning, session.isRunning { session.stopRunning() }
+        noteRunning()
+    }
+
+    /// Camera queue. Publishes whether frames are flowing.
+    private func noteRunning() {
+        let running = session.isRunning
+        Task { @MainActor in self.sessionRunning = running }
     }
 
     /// Switches between the back and front cameras.
@@ -521,6 +563,7 @@ final class CameraController: NSObject {
         routeForResolution()
         if wantsPortrait { _ = applyPortrait(true) }
         if wantsRunning, !session.isRunning { session.startRunning() }
+        noteRunning()
         return Setup(ok: true, lenses: lenses, selected: selected, flash: dev.hasFlash,
                      depth: Self.hasDepth(dev) || (position == .back && AVCaptureDevice.DiscoverySession(
                         deviceTypes: Self.backDepthTypes, mediaType: .video, position: .back).devices.contains(where: Self.hasDepth)))
@@ -607,10 +650,13 @@ final class CameraController: NSObject {
             }.value
         }
         guard status == .running else { throw CameraError.unavailable }
+        var held: AVCaptureDevice?
         if shutter > 0 {
-            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in queue.async { self.holdShutter(shutter) { c.resume() } } }
+            held = await withCheckedContinuation { (c: CheckedContinuation<AVCaptureDevice?, Never>) in
+                queue.async { self.holdShutter(shutter) { c.resume(returning: $0) } }
+            }
         }
-        defer { if shutter > 0 { queue.async { self.releaseShutter() } } }
+        defer { if shutter > 0 { let d = held; queue.async { self.releaseShutter(d) } } }
         return try await withCheckedThrowingContinuation { cont in
             queue.async {
                 let settings: AVCapturePhotoSettings
@@ -648,7 +694,7 @@ final class CameraController: NSObject {
                 }
                 let id = settings.uniqueID
                 let delegate = PhotoDelegate(location: location, singleFrame: bayer != nil) { [weak self] result in
-                    self?.queue.async { self?.inFlight[id] = nil }
+                    self?.queue.async { self?.inFlight[id] = nil; self?.stopIfIdle() }
                     cont.resume(with: result)
                 }
                 self.inFlight[id] = delegate

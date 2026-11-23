@@ -250,10 +250,10 @@ struct ControlDeck: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 RollThumb()
-                    .onTapGesture { showRoll = true }
+                    .onTapGesture { if model.exposing == nil { showRoll = true } }
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            ShutterButton(enabled: model.camera.isReady && model.pano?.capturing != true) { model.capture() }
+            ShutterButton(enabled: model.camera.isReady && model.pano?.capturing != true, stop: model.exposing != nil) { model.capture() }
             if model.prefs.panoMode && panoShots > 0 {
                 Button { model.finishPanorama() } label: {
                     Text("DONE").font(Theme.mono(13, .bold)).foregroundStyle(panoShots >= 2 ? .black : Theme.dim)
@@ -264,6 +264,8 @@ struct ControlDeck: View {
                 .frame(maxWidth: .infinity, alignment: .trailing)
             } else {
                 LensPicker()
+                    .disabled(model.captureBusy)
+                    .opacity(model.captureBusy ? 0.4 : 1)
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
@@ -273,6 +275,8 @@ struct ControlDeck: View {
 
 struct ShutterButton: View {
     var enabled: Bool
+    /// A long exposure is running: the button stops it.
+    var stop = false
     var action: () -> Void
     @GestureState private var pressed = false
 
@@ -281,6 +285,7 @@ struct ShutterButton: View {
             Circle().stroke(Theme.label, lineWidth: 3).frame(width: 78, height: 78)
             Circle().fill(Theme.amber).frame(width: 64, height: 64)
                 .overlay(Circle().fill(.white.opacity(pressed ? 0.25 : 0)))
+                .overlay { if stop { RoundedRectangle(cornerRadius: 4).fill(.black).frame(width: 22, height: 22) } }
                 .scaleEffect(pressed ? 0.9 : 1)
         }
         .opacity(enabled ? 1 : 0.4)
@@ -291,7 +296,7 @@ struct ShutterButton: View {
                 .updating($pressed) { _, s, _ in s = true }
                 .onEnded { _ in if enabled { action() } }
         )
-        .accessibilityLabel("Take photo")
+        .accessibilityLabel(stop ? "Stop exposure" : "Take photo")
         .accessibilityAddTraits(.isButton)
     }
 }

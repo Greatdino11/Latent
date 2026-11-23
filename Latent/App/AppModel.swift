@@ -24,8 +24,15 @@ final class AppModel {
     /// Portrait mode: capture depth so the background can be blurred (now and when re-developing).
     private(set) var portrait = false
 
+    /// A panorama or long exposure is under way: the camera mustn't change underneath it.
+    var captureBusy: Bool { pano != nil || exposing != nil }
+
     func togglePortrait() {
+        guard !captureBusy else { return }
         let want = !portrait
+        if want, prefs.zeroProcess || prefs.highResolution || prefs.shutter > 0 {
+            show("Portrait uses normal capture: ZERO, 48MP and slow shutter pause until it's off")
+        }
         portrait = want
         Task {
             let ok = await camera.setPortrait(want)
@@ -84,6 +91,12 @@ final class AppModel {
 
     func updateSensors() {
         let live = isActive && !viewfinderCovered
+        if !live {
+            // A self-timer shouldn't fire into a covered or backgrounded camera, and a long exposure keeps what it
+            // has rather than failing when the app leaves the screen.
+            if countdownTask != nil { countdownTask?.cancel(); countdownTask = nil; countdown = nil }
+            if exposing != nil { camera.finishExposureEarly() }
+        }
         camera.setRunning(live)
         location.setActive(live && prefs.saveLocation)
         if live, prefs.showLevel { level.start() } else { level.stop() }
@@ -104,6 +117,12 @@ final class AppModel {
     /// The shutter: starts the self-timer when one is set (pressing again cancels it), otherwise shoots.
     /// `timer` overrides the self-timer for this press (the watch remote sends its own).
     func capture(timer: Int? = nil) {
+        // During a long exposure the shutter is STOP: finish now, keeping what's exposed.
+        if exposing != nil {
+            camera.finishExposureEarly()
+            Feedback.selection()
+            return
+        }
         let seconds = timer ?? timerSeconds
         if countdownTask != nil {
             countdownTask?.cancel(); countdownTask = nil; countdown = nil
@@ -229,11 +248,14 @@ final class AppModel {
         guard pano?.capturing == false, (pano?.scenes.count ?? 0) < Panorama.maxFrames else { return }
         pano?.capturing = true
         let fix = prefs.saveLocation ? location.current : nil
+        // Lock exposure, white balance and focus on what the first shot sees, before it's taken (the lock and the
+        // capture run in order on the camera's queue), so every frame matches.
+        let first = pano?.scenes.isEmpty == true
+        if first { camera.lockForPanorama(true) }
         Task {
             do {
                 let frame = try await camera.capture(flash: .off, location: fix)
-                if pano?.scenes.isEmpty == true {
-                    camera.lockForPanorama(true)
+                if first {
                     pano?.metadata = frame.metadata; pano?.location = fix
                     let exif = frame.metadata[kCGImagePropertyExifDictionary as String] as? [String: Any]
                     pano?.focal35 = (exif?[kCGImagePropertyExifFocalLenIn35mmFilm as String] as? NSNumber)?.doubleValue
@@ -256,8 +278,7 @@ final class AppModel {
     /// Stitches and develops the panorama.
     func finishPanorama() {
         guard let shots = pano, shots.scenes.count >= 2, !shots.capturing else { return }
-        pano = nil
-        camera.lockForPanorama(false)
+        pano?.capturing = true                     // stitching: shots stay until it works
         let stock = prefs.resolveStock()
         var options = currentOptions(for: stock)
         options.portraitLens = nil
@@ -267,9 +288,13 @@ final class AppModel {
             do {
                 let result = try await Darkroom.shared.developPanorama(shots.scenes, sceneReferred: shots.sceneReferred, focal35: shots.focal35,
                                                                        metadata: shots.metadata, stock: stock, options: options)
+                pano = nil                         // releases the shots
+                camera.lockForPanorama(false)
                 await keep(result, stock: stock, original: nil, location: shots.location, saveToPhotos: prefs.saveToPhotos)
             } catch {
-                errorMessage = error.localizedDescription
+                // Keep every shot: take another (overlapping more) and tap DONE again, or CANCEL.
+                pano?.capturing = false
+                errorMessage = error.localizedDescription + "\n\nYour shots are kept: add another overlapping shot and tap DONE, or CANCEL."
             }
         }
     }

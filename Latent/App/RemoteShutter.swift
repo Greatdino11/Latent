@@ -33,7 +33,7 @@ final class RemoteShutter: NSObject, WCSessionDelegate {
     nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
         let timer = message["timer"] as? Int ?? 0
         Task { @MainActor in
-            guard let model = self.model, model.camera.isReady, model.isActive,
+            guard let model = self.model, model.camera.isReady, model.isActive, !model.viewfinderCovered, model.exposing == nil,
                   UIApplication.shared.applicationState == .active else {
                 replyHandler(["ok": false, "reason": "Open Latent on your iPhone"]); return
             }

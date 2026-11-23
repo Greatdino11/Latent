@@ -155,15 +155,18 @@ private struct TopBar: View {
                         .foregroundStyle(model.portrait ? Theme.amber : Theme.label)
                         .rotationEffect(turn)
                 }
+                .disabled(model.captureBusy)
                 .accessibilityLabel(model.portrait ? "Portrait on" : "Portrait off")
             }
             if model.camera.hasFrontCamera {
                 Button { Task { await model.camera.flip() } } label: {
                     Image(systemName: "arrow.triangle.2.circlepath.camera").rotationEffect(turn)
                 }
+                .disabled(model.captureBusy)
                 .accessibilityLabel("Switch camera")
             }
             Button { showSettings = true } label: { Image(systemName: "gearshape").rotationEffect(turn) }
+                .disabled(model.exposing != nil)
         }
         .animation(.snappy, value: turn)
         .font(.system(size: 17))

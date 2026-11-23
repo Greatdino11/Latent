@@ -82,7 +82,7 @@ final class Preferences {
         dust = d.bool(forKey: "dust")
         highResolution = d.bool(forKey: "hires")
         zeroProcess = d.bool(forKey: "zero")
-        shutter = d.double(forKey: "shutter")
+        shutter = 0          // always start on AUTO: a long night exposure shouldn't still be set the next morning
         trails = d.bool(forKey: "trails")
         crisp = d.bool(forKey: "crisp")
         expired = d.double(forKey: "expired")

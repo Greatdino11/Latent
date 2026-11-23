@@ -6,7 +6,7 @@ import UIKit
 enum AspectRatio: String, CaseIterable, Identifiable, Codable {
     case r3x2 = "3:2", r4x3 = "4:3", r1x1 = "1:1", r16x9 = "16:9", pano = "65:24"
     var id: String { rawValue }
-    var label: String { self == .pano ? "PANO" : rawValue }
+    var label: String { self == .pano ? "XPAN" : rawValue }    // not "PANO": that's the stitching mode
     /// Long side divided by short side.
     var longOverShort: CGFloat {
         switch self {

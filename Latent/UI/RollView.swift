@@ -492,7 +492,11 @@ private struct PhotoPager: View {
                 }
             }
         }
-        .onChange(of: selection, initial: true) { load() }
+        .onChange(of: selection, initial: true) { old, new in
+            // A push/pull still settling on the frame being left would be lost: develop it now.
+            if old != new { commitPendingPush(for: old) }
+            load()
+        }
         .sheet(isPresented: Binding(get: { socialURL != nil }, set: { if !$0 { socialURL = nil } })) {
             if let socialURL { ShareSheet(items: [socialURL]).presentationDetents([.medium, .large]) }
         }
@@ -687,7 +691,7 @@ private struct PhotoPager: View {
             // Develop once the dial has settled.
             guard loadedFor == selection else { return }
             try? await Task.sleep(for: .milliseconds(600))
-            guard !Task.isCancelled, push != (model.roll.recipe(for: item!).pushPull ?? 0) else { return }
+            guard !Task.isCancelled, let item, push != (model.roll.recipe(for: item).pushPull ?? 0) else { return }
             apply()
         }
     }
@@ -822,6 +826,14 @@ private struct PhotoPager: View {
             status = url == nil ? "Couldn't prepare the image" : nil
             socialURL = url
         }
+    }
+
+    /// Develops a push/pull that hadn't settled when the user swiped to another frame.
+    private func commitPendingPush(for id: String) {
+        guard loadedFor == id, let left = model.roll.item(id: id), left.hasNegative,
+              push != (model.roll.recipe(for: left).pushPull ?? 0) else { return }
+        let p = push
+        Task { _ = try? await model.reprint(left) { $0.pushPull = p } }
     }
 
     private func save(_ item: RollItem) {

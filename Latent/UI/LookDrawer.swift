@@ -88,12 +88,17 @@ struct LookDrawer: View {
                         .disabled(isDefault)
                 }
 
+                if model.captureBusy {
+                    Text(model.exposing != nil ? "Exposing: capture settings unlock when it's done." : "Panorama in progress: capture settings unlock after DONE or CANCEL.")
+                        .font(.caption).foregroundStyle(Theme.amber)
+                }
                 group("MODE", note: prefs.panoMode ? "PANO: take 2–5 shots turning on the spot, each overlapping the last by about a third, then tap DONE. Exposure locks after the first shot." : nil) {
                     chips {
                         LookChip(title: "PHOTO", on: !prefs.panoMode) { setPano(false) }
                         LookChip(title: "PANO", on: prefs.panoMode) { setPano(true) }
                     }
                 }
+                .disabled(model.captureBusy).opacity(model.captureBusy ? 0.45 : 1)
 
                 group("FILM") {
                     if let stock {
@@ -132,6 +137,7 @@ struct LookDrawer: View {
                         }
                     }
                 }
+                .disabled(model.captureBusy).opacity(model.captureBusy ? 0.45 : 1)
 
                 group("LAB", note: "Expired film fogs the blacks, fades the colour and shifts it a different way each frame. The scanner is the lab's: Frontier is punchy and warm, Noritsu flatter and truer.") {
                     LookSlider(title: "EXPIRED", value: $prefs.expired, range: 0...1, step: 0.05, label: { $0 < 0.01 ? "FRESH" : LookLabels.percent($0) })
@@ -177,6 +183,7 @@ struct LookDrawer: View {
                         LookChip(title: "ZERO", on: prefs.zeroProcess) { setCapture(highRes: false, zero: true) }
                     }
                 }
+                .disabled(model.captureBusy).opacity(model.captureBusy ? 0.45 : 1)
 
                 Text("To change a photo you've already taken, open it in the roll.")
                     .font(.caption).foregroundStyle(Theme.dim)
@@ -269,8 +276,9 @@ enum ActiveLook {
         case .white, .black: out.append("\(p.frameStyle.label.uppercased()) BORDER")
         }
         if p.dateStamp { out.append("DATE") }
-        if p.shutter > 0 { out.append(LongExposure.label(p.shutter) + (p.shutter > 1 && p.trails ? " TRAILS" : "")) }
-        if p.zeroProcess { out.append("ZERO") } else if p.highResolution { out.append("48MP") }
+        if !model.portrait, p.shutter > 0 { out.append(LongExposure.label(p.shutter) + (p.shutter > 1 && p.trails ? " TRAILS" : "")) }
+        // Portrait captures normally: don't claim ZERO or 48MP while it's on.
+        if !model.portrait { if p.zeroProcess { out.append("ZERO") } else if p.highResolution { out.append("48MP") } }
         return out
     }
 }

@@ -92,6 +92,17 @@ final class FrameStacker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         }
     }
 
+    /// Stops now and keeps what's been collected (the shutter pressed again, or the app leaving the screen).
+    func finishNow() {
+        guard !finished else { return }
+        if count > 0, let sum, let peak {
+            finished = true
+            onDone(.success((sum: sum, max: peak, count: count)))
+        } else {
+            fail(CameraError.stopped)
+        }
+    }
+
     func fail(_ error: Error) {
         guard !finished else { return }
         finished = true

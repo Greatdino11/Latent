@@ -93,6 +93,7 @@ struct Viewfinder: View {
                 focusPoint = layer
                 Task { try? await Task.sleep(for: .seconds(1.2)); focusPoint = nil }
             }, onDoubleTap: {
+                guard !model.captureBusy else { return }
                 Task { await model.camera.flip() }
             }, onLongPress: { layer, device in
                 model.camera.lock(at: device)
