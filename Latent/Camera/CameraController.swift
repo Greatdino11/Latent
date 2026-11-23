@@ -107,6 +107,7 @@ final class CameraController: NSObject {
             status = .unauthorized; return
         }
         hasFrontCamera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) != nil
+        observeSession()
         let setup: Setup = await withCheckedContinuation { cont in
             queue.async { cont.resume(returning: self.configure(position: .back)) }
         }
@@ -491,6 +492,41 @@ final class CameraController: NSObject {
             }
             self.noteRunning()
         }
+    }
+
+    @ObservationIgnored private var observers: [NSObjectProtocol] = []
+
+    /// Interruptions (a call, another app taking the camera, too hot) and runtime errors (media services reset)
+    /// stop the session on their own. Keep `sessionRunning` true to reality, end a long exposure cleanly, and start
+    /// again when allowed.
+    private func observeSession() {
+        guard observers.isEmpty else { return }
+        let nc = NotificationCenter.default
+        let refresh: (Notification) -> Void = { [weak self] _ in self?.queue.async { self?.noteRunning() } }
+        observers = [
+            nc.addObserver(forName: AVCaptureSession.didStartRunningNotification, object: session, queue: nil, using: refresh),
+            nc.addObserver(forName: AVCaptureSession.didStopRunningNotification, object: session, queue: nil, using: refresh),
+            nc.addObserver(forName: AVCaptureSession.wasInterruptedNotification, object: session, queue: nil) { [weak self] _ in
+                self?.queue.async {
+                    guard let self else { return }
+                    if let stacker = self.inFlightStack { self.stackQueue.async { stacker.finishNow() } }
+                    self.noteRunning()
+                }
+            },
+            nc.addObserver(forName: AVCaptureSession.interruptionEndedNotification, object: session, queue: nil) { [weak self] _ in
+                self?.queue.async { self?.restartIfWanted() }
+            },
+            nc.addObserver(forName: AVCaptureSession.runtimeErrorNotification, object: session, queue: nil) { [weak self] _ in
+                // Media services resets and most runtime errors recover with a restart; try once, a little later.
+                self?.queue.asyncAfter(deadline: .now() + 0.5) { self?.restartIfWanted() }
+            },
+        ]
+    }
+
+    /// Camera queue. Starts the session again if it should be running.
+    private func restartIfWanted() {
+        if configured, wantsRunning, !session.isRunning { session.startRunning() }
+        noteRunning()
     }
 
     /// Camera queue. Stops the session if a stop was put off until the last capture finished.
