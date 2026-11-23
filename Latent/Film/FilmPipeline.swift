@@ -104,8 +104,8 @@ enum FilmPipeline {
         // 10. Grain last, on top of everything, like real silver.
         // A Process Zero frame already carries real sensor noise: add less synthetic grain on top.
         // Expired film is grainier too.
-        let grainUser = options.grainAmount * (options.processZero == true ? 0.6 : 1) * (1 + 0.8 * (options.expired ?? 0))
-        img = grain(on: img, stock: stock, user: grainUser, extent: extent, short: short)
+        let grainUser = options.grainAmount * (options.processZero == true ? 0.75 : 1) * (1 + 0.8 * (options.expired ?? 0))
+        img = grain(on: img, stock: stock, user: grainUser, push: options.pushPull ?? 0, iso: options.iso, extent: extent, short: short)
 
         // 11. The lab scanner reads the whole frame, grain included.
         if let scanner = options.scanner { img = scan(img, scanner) }
@@ -364,41 +364,90 @@ enum FilmPipeline {
         return add(light, onto: img)
     }
 
-    static func grain(on img: CIImage, stock: FilmStock, user: Double, extent: CGRect, short: CGFloat) -> CIImage {
-        let strength = stock.grain * user
+    /// Adaptive film grain, built the way grain behaves on real film rather than as an even noise overlay:
+    /// - Tone: strongest in the midtones, fading in the brightest highlights and the deepest shadows (where a print
+    ///   is almost all or almost no developed silver).
+    /// - Structure: two layers, fine specks and coarser clumps, sized from the stock and the frame (so it looks the
+    ///   same at 12MP and 48MP); colour films get partly independent dye clouds per layer, the blue coarsest.
+    /// - Development: pushing coarsens and strengthens it; pulling softens it.
+    /// - Light: high-ISO captures already carry sensor noise, so less grain is added on top.
+    static func grain(on img: CIImage, stock: FilmStock, user: Double, push: Double = 0, iso: Double? = nil,
+                      extent: CGRect, short: CGFloat) -> CIImage {
+        var strength = stock.grain * user * pow(2, 0.35 * push)
+        strength *= grainLightFactor(iso: iso)
         guard strength > 0.001 else { return img }
 
-        // Noise stays at native resolution (resampling it causes moiré); the blur sets the clump size.
-        let size = max(1, short / 2400) * stock.grainSize
-        let sigma = max(0.6, 0.55 * size)
-        let padded = extent.insetBy(dx: -16, dy: -16).integral
-        let noise = whiteNoise(covering: padded)
+        let size = max(1, short / 2400) * stock.grainSize * (1 + 0.15 * max(0, push))
+        let target = 0.008 + 0.05 * strength                    // overall std, in gamma space
+        let base = img.applyingFilter("CILinearToSRGBToneCurve")
+        let weight = toneWeight(base, extent: extent)
+        let mid = CIImage(color: CIColor(red: 0.5, green: 0.5, blue: 0.5, alpha: 1,
+                                         colorSpace: CGColorSpace(name: CGColorSpace.linearSRGB)!)!).cropped(to: extent)
+        let padded = extent.insetBy(dx: -24, dy: -24).integral
 
-        // Blurred uniform noise has std ≈ 0.078 / σ (measured). Map it to the target std in gamma space.
-        let targetStd = 0.008 + 0.05 * strength
-        let h = CGFloat(targetStd * sigma / 0.078) / 2
-
-        // Layer centred on 0.5: S = 0.5 + (n − 0.5)·h. Linear Light then gives base + 2S − 1 = base + grain.
-        let m = CIFilter.colorMatrix()
-        m.inputImage = noise
-        if stock.isMonochrome {
-            let v = CIVector(x: h, y: 0, z: 0, w: 0)
-            m.rVector = v; m.gVector = v; m.bVector = v
-        } else {
-            // Mostly luminance grain with some chroma, like dye clouds.
-            m.rVector = CIVector(x: 0.8 * h, y: 0.2 * h, z: 0, w: 0)
-            m.gVector = CIVector(x: 0.8 * h, y: 0, z: 0.2 * h, w: 0)
-            m.bVector = CIVector(x: 0.8 * h, y: 0.1 * h, z: 0.1 * h, w: 0)
+        // (scale of the clumps, share of the grain, colour mix rows R/G/B over the three noise channels)
+        let layers: [(scale: CGFloat, share: Double, rows: [(Double, Double, Double)])] = [
+            (1.0, 0.85, [(0.82, 0.18, 0), (0.82, 0, 0.18), (0.82, 0.09, 0.09)]),
+            (2.6, 0.53, [(0.75, 0.25, 0), (0.75, 0, 0.25), (0.6, 0.15, 0.4)]),     // coarser, blue the coarsest
+        ]
+        var out = base
+        for layer in layers {
+            // Blurred uniform noise has std ≈ 0.078 / σ (measured). Layer centred on 0.5 for Linear Light.
+            let sigma = max(0.6, 0.55 * size * layer.scale)
+            let h = CGFloat(target * layer.share * Double(sigma) / 0.078) / 2
+            let m = CIFilter.colorMatrix()
+            m.inputImage = whiteNoise(covering: padded)
+            if stock.isMonochrome {
+                let v = CIVector(x: h, y: 0, z: 0, w: 0)
+                m.rVector = v; m.gVector = v; m.bVector = v
+            } else {
+                let r = layer.rows
+                m.rVector = CIVector(x: r[0].0 * h, y: r[0].1 * h, z: r[0].2 * h, w: 0)
+                m.gVector = CIVector(x: r[1].0 * h, y: r[1].1 * h, z: r[1].2 * h, w: 0)
+                m.bVector = CIVector(x: r[2].0 * h, y: r[2].1 * h, z: r[2].2 * h, w: 0)
+            }
+            m.aVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+            let bias = 0.5 - 0.5 * h
+            m.biasVector = CIVector(x: bias, y: bias, z: bias, w: 1)
+            guard let raw = m.outputImage?.applyingGaussianBlur(sigma: sigma).cropped(to: extent) else { continue }
+            // Fade the layer towards neutral (0.5) where the tone carries little grain.
+            let shaped = raw.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: mid, kCIInputMaskImageKey: weight])
+            let blend = CIFilter.linearLightBlendMode()
+            blend.inputImage = shaped
+            blend.backgroundImage = out
+            out = blend.outputImage ?? out
         }
-        m.aVector = CIVector(x: 0, y: 0, z: 0, w: 0)
-        let bias = 0.5 - 0.5 * h
-        m.biasVector = CIVector(x: bias, y: bias, z: bias, w: 1)
-        guard let layer = m.outputImage?.applyingGaussianBlur(sigma: sigma).cropped(to: extent) else { return img }
+        return out.applyingFilter("CISRGBToneCurveToLinear").cropped(to: extent)
+    }
 
-        let blend = CIFilter.linearLightBlendMode()
-        blend.inputImage = layer
-        blend.backgroundImage = img.applyingFilter("CILinearToSRGBToneCurve")
-        guard let out = blend.outputImage else { return img }
-        return out.applyingFilter("CISRGBToneCurveToLinear")
+    /// How much grain each tone carries (gamma-encoded luminance in, weight out): a tent peaking at 0.45,
+    /// ~0.3 in deep shadow and ~0.2 in clipped white, smoothed by working on a quarter-size copy.
+    static func toneWeight(_ gammaImage: CIImage, extent: CGRect) -> CIImage {
+        let luma = CIVector(x: 0.2126, y: 0.7152, z: 0.0722, w: 0)
+        func line(_ k: CGFloat, _ c: CGFloat) -> CIImage {
+            let v = CIVector(x: luma.x * k, y: luma.y * k, z: luma.z * k, w: 0)
+            return gammaImage.applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": v, "inputGVector": v, "inputBVector": v, "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+                "inputBiasVector": CIVector(x: c, y: c, z: c, w: 0)])
+        }
+        let rising = line(2.0, 0.1)                 // (L + 0.05) · 2
+        let falling = line(-1.818, 1.818)           // (1 − L) · 1.818
+        let tent = rising.applyingFilter("CIMinimumCompositing", parameters: [kCIInputBackgroundImageKey: falling])
+            .applyingFilter("CIColorClamp", parameters: ["inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 1),
+                                                         "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)])
+        let w = tent.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: 0.78, y: 0, z: 0, w: 0), "inputGVector": CIVector(x: 0, y: 0.78, z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: 0.78, w: 0), "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+            "inputBiasVector": CIVector(x: 0.22, y: 0.22, z: 0.22, w: 0)])
+        return w.transformed(by: CGAffineTransform(scaleX: 0.25, y: 0.25))
+            .applyingGaussianBlur(sigma: 1.5)
+            .transformed(by: CGAffineTransform(scaleX: 4, y: 4))
+            .cropped(to: extent)
+    }
+
+    /// Less added grain at high ISO, where the capture's own noise already reads as grain.
+    static func grainLightFactor(iso: Double?) -> Double {
+        guard let iso, iso > 200 else { return 1 }
+        return 1 / (1 + 0.18 * log2(iso / 200))
     }
 }

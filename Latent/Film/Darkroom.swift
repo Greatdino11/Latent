@@ -28,6 +28,8 @@ actor Darkroom {
         options.sceneReferred = sceneReferred
         if frame.flashFired { options.flashFired = true }
         if frame.singleFrame { options.processZero = true }
+        if options.iso == nil, let exif = frame.metadata[kCGImagePropertyExifDictionary as String] as? [String: Any],
+           let iso = (exif[kCGImagePropertyExifISOSpeedRatings as String] as? [NSNumber])?.first?.doubleValue { options.iso = iso }
         options.negativeFormat = NegativeCodec.current
         // Depth (portrait captures, iPhone Portrait-mode imports): kept so blur and focus can change later.
         var depth: (image: CIImage, png: Data)?

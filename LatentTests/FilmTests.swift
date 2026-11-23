@@ -648,3 +648,34 @@ final class PanoramaTests: XCTestCase {
         XCTAssertThrowsError(try Panorama.stitch([a, b], focal35: nil))
     }
 }
+
+final class AdaptiveGrainTests: XCTestCase {
+    /// Standard deviation of a flat patch after grain, measured in display (sRGB) values.
+    private func grainStd(at v: Double, iso: Double? = nil, push: Double = 0) -> Double {
+        let lin = CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!
+        let e = CGRect(x: 0, y: 0, width: 512, height: 512)
+        // v is the display value; the pipeline works in linear light.
+        let l = v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4)
+        let flat = CIImage(color: CIColor(red: l, green: l, blue: l, alpha: 1, colorSpace: lin)!).cropped(to: e)
+        let out = FilmPipeline.grain(on: flat, stock: .honey, user: 1, push: push, iso: iso, extent: e, short: 512)
+        var px = [Float](repeating: 0, count: 256 * 256 * 4)
+        CIContext().render(out, toBitmap: &px, rowBytes: 256 * 16, bounds: CGRect(x: 128, y: 128, width: 256, height: 256),
+                           format: .RGBAf, colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!)
+        let g = stride(from: 1, to: px.count, by: 4).map { Double(px[$0]) }
+        let mean = g.reduce(0, +) / Double(g.count)
+        return (g.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(g.count)).squareRoot()
+    }
+
+    func testGrainIsStrongestInTheMidtones() {
+        let shadow = grainStd(at: 0.03), mid = grainStd(at: 0.45), highlight = grainStd(at: 0.97)
+        XCTAssertGreaterThan(mid, shadow * 1.8)
+        XCTAssertGreaterThan(mid, highlight * 2)
+    }
+
+    func testHighISOAndPushChangeTheGrain() {
+        XCTAssertEqual(FilmPipeline.grainLightFactor(iso: 100), 1)
+        XCTAssertLessThan(FilmPipeline.grainLightFactor(iso: 3200), 0.65)
+        XCTAssertLessThan(grainStd(at: 0.45, iso: 3200), grainStd(at: 0.45, iso: 100))
+        XCTAssertGreaterThan(grainStd(at: 0.45, push: 1), grainStd(at: 0.45))
+    }
+}
