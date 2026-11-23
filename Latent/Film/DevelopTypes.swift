@@ -89,6 +89,8 @@ struct DevelopOptions: Codable {
     var processZero: Bool? = nil
     /// The capture's ISO (from its metadata), so grain can back off where the sensor's own noise already shows.
     var iso: Double? = nil
+    /// CRISP detail: half the stock's lens softness and colour fringing, for a sharper, modern-scan look.
+    var crisp: Bool? = nil
     /// How expired the film was (0…1): fogged blacks, faded contrast, a colour shift and coarser grain.
     var expired: Double? = nil
     /// Scanner character; nil = a plain scan.

@@ -44,8 +44,9 @@ actor Darkroom {
         let negativeDone = DispatchGroup()
         var negativeResult: Result<Data, Error> = .failure(DarkroomError.encode)
         let (ctx, p3, toStore) = (context, p3, NegativeCodec.encode(scene))
+        // Quality 0.97 is near lossless: re-develops keep ~99% of fine detail (the default kept ~93%).
         DispatchQueue.global(qos: .userInitiated).async(group: negativeDone) {
-            negativeResult = Result { try ctx.heif10Representation(of: toStore, colorSpace: p3, options: [:]) }
+            negativeResult = Result { try ctx.heif10Representation(of: toStore, colorSpace: p3, options: [CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): 0.97]) }
         }
         let jpeg = try print(scene, stock: stock, options: options, metadata: frame.metadata, depth: depth?.image, clock: &clock)
         negativeDone.wait()

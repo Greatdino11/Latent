@@ -414,6 +414,7 @@ private struct PhotoPager: View {
     @State private var halation = true
     @State private var flare = 0.6
     @State private var expired = 0.0
+    @State private var crisp = false
     @State private var scanner: ScannerLook?
     @State private var loadedFor = ""
 
@@ -649,6 +650,8 @@ private struct PhotoPager: View {
             LookSlider(title: "FLARE", value: $flare, range: 0...1.5, step: 0.1, label: LookLabels.flare) { apply() }
             HStack {
                 LookChip(title: halation ? "HALATION ✓" : "HALATION", on: halation) { halation.toggle(); apply() }
+                LookChip(title: "VINTAGE", on: !crisp) { crisp = false; apply() }
+                LookChip(title: "CRISP", on: crisp) { crisp = true; apply() }
                 Spacer()
             }
         }
@@ -764,6 +767,7 @@ private struct PhotoPager: View {
         halation = r.halation
         flare = r.flareStrength
         expired = r.expired ?? 0
+        crisp = r.crisp ?? false
         scanner = r.scanner
         if tool == .lens, !item.hasDepth { tool = .film }
         loadedFor = item.id
@@ -782,7 +786,7 @@ private struct PhotoPager: View {
         let (lk, du) = (leak, dust)
         let (ln, bl, fc) = (lens, blur, focus)
         let (gr, ha, fl) = (grain, halation, flare)
-        let (ex, sc) = (expired, scanner)
+        let (ex, sc, cr) = (expired, scanner, crisp)
         Task {
             do {
                 status = try await model.reprint(item, stock: stock) { o in
@@ -791,7 +795,7 @@ private struct PhotoPager: View {
                     o.lightLeak = lk > 0 ? lk : nil; o.dust = du ? true : nil
                     o.portraitLens = ln; o.blurAmount = bl; o.focusDepth = fc
                     o.grainAmount = gr; o.halation = ha; o.flareAmount = fl
-                    o.expired = ex > 0.01 ? ex : nil; o.scanner = sc
+                    o.expired = ex > 0.01 ? ex : nil; o.scanner = sc; o.crisp = cr ? true : nil
                 }
             } catch {
                 status = error.localizedDescription

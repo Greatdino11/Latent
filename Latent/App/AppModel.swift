@@ -152,6 +152,7 @@ final class AppModel {
         if prefs.dust { o.dust = true }
         if prefs.expired > 0.01 { o.expired = prefs.expired }
         o.scanner = prefs.scanner
+        if prefs.crisp { o.crisp = true }
         return o
     }
 

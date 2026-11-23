@@ -72,12 +72,12 @@ enum FilmPipeline {
         if stock.softness > 0 {
             let soft = img.clampedToExtent().applyingGaussianBlur(sigma: short * 0.0011).cropped(to: extent)
             let mix = CIFilter.dissolveTransition()
-            mix.inputImage = img; mix.targetImage = soft; mix.time = Float(min(1, stock.softness * 0.9))
+            mix.inputImage = img; mix.targetImage = soft; mix.time = Float(min(1, stock.softness * 0.9 * (options.crisp == true ? 0.45 : 1)))
             img = mix.outputImage ?? img
         }
 
         // 7. Lateral chromatic aberration.
-        if stock.aberration > 0 { img = aberration(img, amount: 0.0012 * stock.aberration, extent: extent) }
+        if stock.aberration > 0 { img = aberration(img, amount: 0.0012 * stock.aberration * (options.crisp == true ? 0.5 : 1), extent: extent) }
 
         // 8. Lens flare ghosts from a bright point source.
         if options.flareStrength > 0, stock.flare > 0, let hot = highlightMask(exposedScene, threshold: options.sceneReferred ? 2.5 : 0.93, extent: extent) {

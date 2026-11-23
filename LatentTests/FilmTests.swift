@@ -679,3 +679,28 @@ final class AdaptiveGrainTests: XCTestCase {
         XCTAssertGreaterThan(grainStd(at: 0.45, push: 1), grainStd(at: 0.45))
     }
 }
+
+final class DetailTests: XCTestCase {
+    private func detail(_ jpeg: Data) -> Double {
+        let img = CIImage(data: jpeg)!
+        let e = img.extent, c = CGRect(x: e.midX - 500, y: e.midY - 500, width: 1000, height: 1000)
+        let hp = img.applyingFilter("CIDifferenceBlendMode", parameters: [kCIInputBackgroundImageKey: img.clampedToExtent().applyingGaussianBlur(sigma: 1.5)])
+        var px = [Float](repeating: 0, count: 4)
+        CIContext().render(hp.applyingFilter("CIAreaAverage", parameters: [kCIInputExtentKey: CIVector(cgRect: c)]), toBitmap: &px, rowBytes: 16,
+                           bounds: CGRect(x: 0, y: 0, width: 1, height: 1), format: .RGBAf, colorSpace: nil)
+        return Double(px[0] + px[1] + px[2])
+    }
+
+    /// CRISP keeps more fine detail than VINTAGE; the negative round trip keeps nearly all of it.
+    func testCrispIsSharperAndNegativesKeepDetail() async throws {
+        var o = DevelopOptions(); o.aspect = .r3x2; o.grainAmount = 0; o.flareAmount = 0; o.halation = false
+        o.date = Date(timeIntervalSince1970: 1_800_000_000)
+        let frame = CapturedFrame(source: .image(SimulatedScene.capture, sceneReferred: false), metadata: [:])
+        let vintage = try await Darkroom.shared.develop(frame, stock: .honey, options: o)
+        var c = o; c.crisp = true
+        let crisp = try await Darkroom.shared.develop(frame, stock: .honey, options: c)
+        XCTAssertGreaterThan(detail(crisp.jpeg), detail(vintage.jpeg) * 1.05)
+        let again = try await Darkroom.shared.redevelop(negative: vintage.negative, metadata: [:], stock: .honey, options: vintage.options)
+        XCTAssertGreaterThan(detail(again), detail(vintage.jpeg) * 0.97)
+    }
+}

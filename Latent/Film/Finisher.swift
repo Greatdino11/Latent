@@ -326,7 +326,7 @@ enum JPEGEncoder {
             exif.removeValue(forKey: kCGImagePropertyExifPixelYDimension as String)
             props[kCGImagePropertyExifDictionary as String] = exif
         }
-        props[kCGImageDestinationLossyCompressionQuality as String] = 0.92
+        props[kCGImageDestinationLossyCompressionQuality as String] = 0.95
         CGImageDestinationAddImage(dest, cg, props as CFDictionary)
         guard CGImageDestinationFinalize(dest) else { throw DarkroomError.encode }
         return data as Data

@@ -24,6 +24,8 @@ final class Preferences {
     var shutter: Double { didSet { d.set(shutter, forKey: "shutter") } }
     /// Long exposures keep moving lights as solid trails.
     var trails: Bool { didSet { d.set(trails, forKey: "trails") } }
+    /// CRISP detail for new frames (less lens softness and fringing).
+    var crisp: Bool { didSet { d.set(crisp, forKey: "crisp") } }
     /// The shutter takes panorama shots (stitched when done) instead of single photos.
     var panoMode = false
     /// Expired-film amount for new frames (0…1).
@@ -62,7 +64,7 @@ final class Preferences {
     init() {
         d.register(defaults: [
             "selectedStock": FilmStock.randomID, "aspect": AspectRatio.r3x2.rawValue, "grain": 1.0,
-            "halation": true, "flareAmount": 0.6, "dateStamp": false, "frame": FrameStyle.none.rawValue, "lightLeak": 0.0, "dust": false, "hires": false, "zero": false, "shutter": 0.0, "trails": true, "expired": 0.0, "portraitLens": PortraitLens.classic.rawValue, "blurAmount": 0.6,
+            "halation": true, "flareAmount": 0.6, "dateStamp": false, "frame": FrameStyle.none.rawValue, "lightLeak": 0.0, "dust": false, "hires": false, "zero": false, "shutter": 0.0, "trails": true, "crisp": false, "expired": 0.0, "portraitLens": PortraitLens.classic.rawValue, "blurAmount": 0.6,
             "saveToPhotos": true, "saveOriginal": false, "grid": false, "level": true, "meter": true,
             "saveLocation": false, "haptics": true, "advanceSound": false, "bigReveal": false,
         ])
@@ -82,6 +84,7 @@ final class Preferences {
         zeroProcess = d.bool(forKey: "zero")
         shutter = d.double(forKey: "shutter")
         trails = d.bool(forKey: "trails")
+        crisp = d.bool(forKey: "crisp")
         expired = d.double(forKey: "expired")
         scanner = ScannerLook(rawValue: d.string(forKey: "scanner") ?? "")
         portraitLens = PortraitLens(rawValue: d.string(forKey: "portraitLens") ?? "") ?? .classic

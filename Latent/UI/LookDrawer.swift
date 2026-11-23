@@ -105,6 +105,10 @@ struct LookDrawer: View {
                     LookSlider(title: "GRAIN", value: $prefs.grainAmount, range: 0...2, step: 0.25, label: LookLabels.grain)
                     LookSlider(title: "FLARE", value: $prefs.flareAmount, range: 0...1.5, step: 0.1, label: LookLabels.flare)
                     chips {
+                        LookChip(title: "VINTAGE", on: !prefs.crisp) { prefs.crisp = false }
+                        LookChip(title: "CRISP", on: prefs.crisp) { prefs.crisp = true }
+                    }
+                    chips {
                         LookChip(title: prefs.halation ? "HALATION ✓" : "HALATION", on: prefs.halation) { prefs.halation.toggle() }
                         LookChip(title: prefs.dust ? "DUST ✓" : "DUST", on: prefs.dust) { prefs.dust.toggle() }
                         LookChip(title: prefs.dateStamp ? "DATE ✓" : "DATE", on: prefs.dateStamp) { prefs.dateStamp.toggle() }
@@ -229,7 +233,7 @@ struct LookDrawer: View {
         let p = model.prefs
         p.grainAmount = 1; p.flareAmount = 0.6; p.halation = true; p.dust = false; p.dateStamp = false
         if p.panoMode { model.cancelPanorama(); p.panoMode = false }
-        p.lightLeak = 0; p.frameStyle = .none; p.blurAmount = 0.6; p.expired = 0; p.scanner = nil
+        p.lightLeak = 0; p.frameStyle = .none; p.blurAmount = 0.6; p.expired = 0; p.scanner = nil; p.crisp = false
         if !p.isRandom { p.stockStrength[p.selectedStockID] = nil }
         if p.highResolution || p.zeroProcess { setCapture(highRes: false, zero: false) }
         if p.shutter > 0 { p.shutter = 0; model.camera.setSlowShutter(0) }
@@ -256,6 +260,7 @@ enum ActiveLook {
         }
         if p.lightLeak > 0 { out.append(p.lightLeak < 0.75 ? "LEAKS" : "STRONG LEAKS") }
         if p.dust { out.append("DUST") }
+        if p.crisp { out.append("CRISP") }
         if p.expired > 0.01 { out.append("EXPIRED \(LookLabels.percent(p.expired))") }
         if let s = p.scanner { out.append(s.label.uppercased()) }
         switch p.frameStyle {
