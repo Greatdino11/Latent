@@ -789,3 +789,90 @@ final class RollStoreFlowTests: XCTestCase {
         XCTAssertGreaterThan(updated.stamp, item.stamp)
     }
 }
+
+final class TolerantSaveTests: XCTestCase {
+    /// A custom stock saved before some settings existed still loads, with defaults for what's missing.
+    func testOldCustomStockStillLoads() throws {
+        let old = Data(#"{"id":"custom-old","name":"Beach","iso":200,"baseID":"coast","warmth":0.4}"#.utf8)
+        let stock = try CustomStock.tolerant(from: old)
+        XCTAssertEqual(stock.name, "Beach"); XCTAssertEqual(stock.warmth, 0.4); XCTAssertEqual(stock.grain, 1)
+        let list = try CustomStock.tolerantList(from: Data("[\(String(decoding: old, as: UTF8.self))]".utf8))
+        XCTAssertEqual(list.first?.id, "custom-old")
+    }
+
+    /// A recipe whose stock copy lacks a setting still reads, and keeps its real settings.
+    func testRecipeWithOlderStockCopyStillReads() throws {
+        let json = #"{"exposure":0,"grainAmount":1.7,"halation":true,"flare":true,"dateStamp":false,"frame":"white","date":800000000,"sceneReferred":true,"customStock":{"id":"custom-old","baseID":"honey"}}"#
+        let r = try DevelopOptions.tolerant(from: Data(json.utf8), defaults: DevelopOptions())
+        XCTAssertEqual(r.grainAmount, 1.7); XCTAssertEqual(r.frame, .white)
+        XCTAssertEqual(r.customStock?.id, "custom-old"); XCTAssertEqual(r.customStock?.name, "My Stock")
+    }
+
+    /// An unreadable recipe makes a re-develop stop, never overwrite the frame with blank settings.
+    func testUnreadableRecipeThrows() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let roll = RollStore(folder: dir)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let item = try roll.add(DevelopResult(jpeg: Data([1]), negative: Data([2]), options: DevelopOptions(), depth: nil), stock: .honey)
+        try Data("not json".utf8).write(to: item.recipeURL)
+        XCTAssertThrowsError(try roll.readRecipe(for: item))
+    }
+}
+
+@MainActor
+final class AppFlowTests: XCTestCase {
+    private func makeModel() async throws -> (AppModel, RollItem, URL) {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let model = AppModel(roll: RollStore(folder: dir))
+        var o = DevelopOptions(); o.aspect = .r3x2; o.grainAmount = 0; o.date = Date(timeIntervalSince1970: 1_800_000_000)
+        let scene = SimulatedScene.capture.transformed(by: CGAffineTransform(scaleX: 0.25, y: 0.25))
+        let result = try await Darkroom.shared.develop(CapturedFrame(source: .image(scene, sceneReferred: false), metadata: [:]), stock: .honey, options: o)
+        let item = try model.roll.add(result, stock: .honey)
+        return (model, item, dir)
+    }
+
+    /// Two edits started back to back run in order, and the second starts from the first's result: the stock
+    /// change survives the push edit that follows it.
+    func testRedevelopsOfOneFrameRunInOrder() async throws {
+        let (model, item, dir) = try await makeModel()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        async let first = model.reprint(item, stock: .coast, syncPhotos: false)
+        async let second = model.reprint(item, syncPhotos: false) { $0.pushPull = 1 }
+        _ = try await (first, second)
+        let now = try XCTUnwrap(model.roll.item(id: item.id))
+        XCTAssertEqual(now.stockID, "coast")
+        XCTAssertEqual(model.roll.recipe(for: now).pushPull, 1)
+        let prints = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasPrefix(item.base) && $0.hasSuffix(".jpg") }
+        XCTAssertEqual(prints.count, 1, "exactly one print per frame")
+    }
+
+    /// A frame deleted while it's being re-developed stays deleted.
+    func testDeletedWhileDevelopingStaysDeleted() async throws {
+        let (model, item, dir) = try await makeModel()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let work = Task { try await model.reprint(item, stock: .coast, syncPhotos: false) }
+        model.roll.delete(item)
+        _ = await work.result
+        let left = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasPrefix(item.base) }
+        XCTAssertTrue(left.isEmpty, "nothing written back: \(left)")
+    }
+
+    /// An edit to a frame saved in Photos is remembered on disk until Photos has it.
+    func testPhotosUpdateIsRememberedOnDisk() async throws {
+        let (model, item, dir) = try await makeModel()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        model.roll.setPhotosID("ASSET", for: item)
+        try await model.reprint(item, syncPhotos: false) { $0.pushPull = 0.5 }
+        XCTAssertEqual(model.roll.photosStaleItems().map(\.id), [item.id])
+    }
+
+    /// If a panorama's first shot can't be taken, panorama mode isn't left half-started with the camera locked.
+    func testFailedFirstPanoShotLeavesNoPanorama() async throws {
+        let (model, _, dir) = try await makeModel()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        model.panoShot()                        // the camera isn't running in tests, so the capture fails
+        for _ in 0..<50 where model.pano != nil { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertNil(model.pano)
+        XCTAssertFalse(model.captureBusy)
+    }
+}

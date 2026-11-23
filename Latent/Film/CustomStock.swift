@@ -100,7 +100,7 @@ enum StockCode {
         while b64.count % 4 != 0 { b64 += "=" }
         guard let packed = Data(base64Encoded: b64),
               let json = try? (packed as NSData).decompressed(using: .zlib) as Data,
-              var custom = try? JSONDecoder().decode(CustomStock.self, from: json),
+              var custom = try? CustomStock.tolerant(from: json),
               FilmStock.builtIn(id: custom.baseID) != nil else { return nil }
         custom.id = CustomStock().id          // a fresh copy, never overwriting one you already have
         return custom

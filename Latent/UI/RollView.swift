@@ -26,6 +26,20 @@ struct RollView: View {
             }
         }
         .statusBarHidden()
+        .overlay(alignment: .top) {
+            // Notices (Photos updates, frames removed with Photos) show here too, not only behind the roll.
+            if let notice = model.notice {
+                Text(notice)
+                    .font(Theme.mono(12, .semibold)).foregroundStyle(Theme.amber)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .background(.black.opacity(0.85), in: Capsule())
+                    .padding(.top, 8).padding(.horizontal, 20)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .allowsHitTesting(false)
+            }
+        }
+        .animation(.snappy, value: model.notice)
         .onChange(of: model.roll.items) { _, items in
             // The frame on screen left the roll (e.g. its photo was deleted in Photos): back to the grid.
             if let id = selected, !items.contains(where: { $0.id == id }) { withAnimation { selected = nil } }

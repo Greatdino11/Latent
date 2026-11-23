@@ -95,7 +95,12 @@ final class Preferences {
         showLevel = d.bool(forKey: "level")
         showMeter = d.bool(forKey: "meter")
         dayNames = d.dictionary(forKey: "dayNames") as? [String: String] ?? [:]
-        let customs = d.data(forKey: "customStocks").flatMap { try? JSONDecoder().decode([CustomStock].self, from: $0) } ?? []
+        var customs: [CustomStock] = []
+        if let data = d.data(forKey: "customStocks") {
+            if let list = try? CustomStock.tolerantList(from: data) { customs = list }
+            // Still unreadable: keep the original aside rather than letting the next save overwrite it.
+            else { d.set(data, forKey: "customStocks.unreadable") }
+        }
         customStocks = customs
         StockRegistry.set(customs)
         stockOrder = d.stringArray(forKey: "stockOrder") ?? FilmStock.all.map(\.id)

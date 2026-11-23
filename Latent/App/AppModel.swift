@@ -9,7 +9,9 @@ import UniformTypeIdentifiers
 @MainActor
 final class AppModel {
     let camera = CameraController()
-    let roll = RollStore()
+    let roll: RollStore
+
+    init(roll: RollStore = RollStore()) { self.roll = roll }
     let prefs = Preferences()
     let level = LevelMonitor()
     let location = LocationProvider()
@@ -66,7 +68,7 @@ final class AppModel {
         didSet {
             updateSensors()
             if isActive && !oldValue { photosSync.refresh() }   // catch deletions made while we were away
-            if !isActive { flushPhotos() }                      // leaving: bring edited frames up to date in Photos
+            flushPhotos()       // leaving: bring edited frames up to date in Photos; returning: retry any left behind
         }
     }
 
@@ -83,6 +85,7 @@ final class AppModel {
         }
         updateSensors()
         photosSync.refresh()
+        flushPhotos()           // Photos updates left over from last time
         orientation.start()
         // Build the look tables in the background so the first frame on each stock develops quickly.
         let stocks = prefs.visibleStocks
@@ -244,7 +247,7 @@ final class AppModel {
     }
     private(set) var pano: PanoShots?
 
-    private func panoShot() {
+    func panoShot() {
         if pano == nil { pano = PanoShots() }
         guard pano?.capturing == false, (pano?.scenes.count ?? 0) < Panorama.maxFrames else { return }
         pano?.capturing = true
@@ -370,26 +373,34 @@ final class AppModel {
 
     // MARK: re-developing
 
-    /// Frames re-developed since their Photos copy was last updated.
-    @ObservationIgnored private var photosPending = Set<String>()
-
-    /// Brings the Photos copies of edited frames up to date in a single library change. `ids` nil: all of them.
+    /// Brings the Photos copies of edited frames up to date in a single library change. `ids` nil: every frame
+    /// marked as behind. The marks live on disk and are cleared only once Photos has the new print, so nothing is
+    /// lost if the app closes or an update fails (it's retried at launch and when the app comes back).
     func flushPhotos(_ ids: Set<String>? = nil) {
-        let due = ids.map { photosPending.intersection($0) } ?? photosPending
+        let due = roll.photosStaleItems().filter { ids?.contains($0.id) ?? true }
         guard !due.isEmpty else { return }
-        photosPending.subtract(due)
-        let edits: [PhotoLibrary.Edit] = due.compactMap { id in
-            guard let item = roll.item(id: id), let pid = roll.photosID(for: item), let jpeg = try? Data(contentsOf: item.url) else { return nil }
-            return PhotoLibrary.Edit(assetID: pid, print: jpeg, recipe: (try? JSONEncoder().encode(roll.recipe(for: item))) ?? Data())
+        var byAsset: [String: RollItem] = [:]
+        var edits: [PhotoLibrary.Edit] = []
+        for item in due {
+            guard let pid = roll.photosID(for: item), let jpeg = try? Data(contentsOf: item.url) else { roll.clearPhotosStale(item); continue }
+            byAsset[pid] = item
+            edits.append(PhotoLibrary.Edit(assetID: pid, print: jpeg, recipe: (try? JSONEncoder().encode(roll.recipe(for: item))) ?? Data()))
         }
+        guard !edits.isEmpty else { return }
+        // Leaving the app: ask iOS for time to finish.
+        let background = UIApplication.shared.beginBackgroundTask(withName: "Update Photos")
         Task {
+            defer { if background != .invalid { UIApplication.shared.endBackgroundTask(background) } }
             do {
-                let missing = try await PhotoLibrary.applyEdits(edits)
-                for pid in missing {
-                    if let item = roll.items.first(where: { roll.photosID(for: $0) == pid }) { roll.setPhotosID(nil, for: item) }
+                let result = try await PhotoLibrary.applyEdits(edits)
+                for pid in result.done { if let item = byAsset[pid] { roll.clearPhotosStale(item) } }
+                for pid in result.missing {
+                    if let item = byAsset[pid] { roll.clearPhotosStale(item); roll.setPhotosID(nil, for: item) }
                 }
+                let behind = edits.count - result.done.count - result.missing.count
+                if behind > 0 { show("\(behind) frame\(behind == 1 ? "" : "s") couldn't be updated in Photos yet. Latent will try again.") }
             } catch {
-                show("Re-developed on the roll; couldn't update Photos: \(error.localizedDescription)")
+                show("Re-developed on the roll; Photos will be updated later (\(error.localizedDescription)).")
             }
         }
     }
@@ -402,14 +413,33 @@ final class AppModel {
     /// A copy of `stock` to keep in a recipe, when it's one of the user's own.
     func snapshot(of stock: FilmStock) -> CustomStock? { prefs.customStocks.first { $0.id == stock.id } }
 
+    /// Re-developments of each frame, run one after another.
+    @ObservationIgnored private var frameWork: [String: Task<Void, Never>] = [:]
+
     /// Prints a frame's negative again: on another stock (`stock`), or on its own with an edit (push/pull,
     /// strength, framing, texture). The frame keeps its own settings unless the edit changes them.
-    /// If the frame was saved to Photos, that copy is updated in place. Returns a status line.
+    /// `syncPhotos: false` (editing): the Photos copy is marked as behind and updated later by `flushPhotos`.
+    /// Re-developments of the same frame run one at a time, each starting from the frame as it is by then.
     @discardableResult
-    /// `syncPhotos: false` (editing): the Photos copy is updated later in one go by `flushPhotos`, not per tweak.
     func reprint(_ item: RollItem, stock newStock: FilmStock? = nil, syncPhotos: Bool = true,
-                 edit: (inout DevelopOptions) -> Void = { _ in }) async throws -> String {
-        var options = roll.recipe(for: item)
+                 edit: @escaping (inout DevelopOptions) -> Void = { _ in }) async throws -> String {
+        let id = item.id
+        let prior = frameWork[id]
+        let work = Task { @MainActor () async throws -> String in
+            _ = await prior?.value
+            return try await self.reprintNow(id: id, stock: newStock, syncPhotos: syncPhotos, edit: edit)
+        }
+        let link = Task<Void, Never> { _ = await work.result }
+        frameWork[id] = link
+        defer { if frameWork[id] == link { frameWork[id] = nil } }
+        return try await work.value
+    }
+
+    private func reprintNow(id: String, stock newStock: FilmStock?, syncPhotos: Bool,
+                            edit: (inout DevelopOptions) -> Void) async throws -> String {
+        // The frame as it is now (an earlier re-develop may have changed its stock), and still on the roll.
+        guard let item = roll.item(id: id) else { throw RollStore.Failure.gone }
+        var options = try roll.readRecipe(for: item)
         let changing = newStock.map { $0.id != item.stockID } ?? false
         guard let stock = changing ? newStock : DevelopOptions.resolveStock(stockID: item.stockID, recipe: options) else {
             throw DarkroomError.missingStock
@@ -423,21 +453,11 @@ final class AppModel {
         let depth = try? Data(contentsOf: item.depthURL)
         let jpeg = try await Darkroom.shared.redevelop(negative: negative, depth: depth, metadata: metadata, stock: stock, options: options)
         let updated = try roll.replace(item, stock: stock, jpeg: jpeg, options: options)
-        if !syncPhotos {
-            if roll.photosID(for: updated) != nil { photosPending.insert(updated.id) }
-            return "Re-developed."
-        }
-        if let id = roll.photosID(for: updated) {
-            do {
-                try await PhotoLibrary.applyEdit(id: id, print: jpeg, recipe: (try? JSONEncoder().encode(options)) ?? Data())
-                return "Updated in Photos too."
-            } catch PhotoLibrary.Failure.missing {
-                roll.setPhotosID(nil, for: updated)
-            } catch {
-                return "Re-developed. Couldn't update Photos: \(error.localizedDescription)"
-            }
-        }
-        return "Re-developed."
+        guard roll.photosID(for: updated) != nil else { return "Re-developed." }
+        roll.markPhotosStale(updated)
+        guard syncPhotos else { return "Re-developed." }
+        flushPhotos([updated.id])
+        return "Re-developed. Updating Photos."
     }
 
     /// Double exposure of two roll frames, printed as a new frame on the first one's stock and settings.

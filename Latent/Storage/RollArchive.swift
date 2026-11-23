@@ -21,7 +21,7 @@ enum RollArchive {
     /// Photos links are left out: they belong to this phone's library and mean nothing on another.
     static func export(from folder: URL, stocks: Data? = nil, progress: (Int, Int) -> Void = { _, _ in }) throws -> URL {
         let files = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
-            .filter { !$0.hasDirectoryPath && $0.pathExtension != "photos" }
+            .filter { !$0.hasDirectoryPath && $0.pathExtension != "photos" && $0.pathExtension != "photos-stale" }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
         let stamp = DateFormatter(); stamp.dateFormat = "yyyy-MM-dd"
         let out = FileManager.default.temporaryDirectory

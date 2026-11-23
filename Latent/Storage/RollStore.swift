@@ -21,6 +21,8 @@ struct RollItem: Identifiable, Hashable {
     var negativeURL: URL { folder.appendingPathComponent("\(base).neg.heic") }
     var recipeURL: URL { folder.appendingPathComponent("\(base).recipe.json") }
     var photosURL: URL { folder.appendingPathComponent("\(base).photos") }
+    /// Present while the Photos copy is behind the roll's print (an edit not yet sent to Photos).
+    var photosStaleURL: URL { folder.appendingPathComponent("\(base).photos-stale") }
     var depthURL: URL { folder.appendingPathComponent("\(base).depth.png") }
     var hasDepth: Bool { FileManager.default.fileExists(atPath: depthURL.path) }
     var stock: FilmStock? { FilmStock.with(id: stockID) }
@@ -66,9 +68,27 @@ final class RollStore {
         return item
     }
 
+    enum Failure: LocalizedError {
+        case gone, unreadableRecipe
+        var errorDescription: String? {
+            switch self {
+            case .gone: "That frame is no longer on the roll."
+            case .unreadableRecipe: "This frame's settings couldn't be read, so it wasn't changed."
+            }
+        }
+    }
+
+    /// The recipe for re-developing: throws rather than handing back defaults when the file exists but can't be
+    /// read, so a re-develop can never overwrite a frame's real settings with blank ones.
+    func readRecipe(for item: RollItem) throws -> DevelopOptions {
+        guard let data = try? Data(contentsOf: item.recipeURL) else { return DevelopOptions(date: item.date) }   // very old frames
+        do { return try DevelopOptions.tolerant(from: data, defaults: DevelopOptions(date: item.date)) } catch { throw Failure.unreadableRecipe }
+    }
+
+    /// The recipe for display (defaults if it can't be read).
     func recipe(for item: RollItem) -> DevelopOptions {
         guard let data = try? Data(contentsOf: item.recipeURL),
-              let r = try? JSONDecoder().decode(DevelopOptions.self, from: data) else {
+              let r = try? DevelopOptions.tolerant(from: data, defaults: DevelopOptions(date: item.date)) else {
             return DevelopOptions(date: item.date)
         }
         return r
@@ -77,11 +97,16 @@ final class RollStore {
     /// Swaps in a re-developed print on a new stock.
     @discardableResult
     func replace(_ item: RollItem, stock: FilmStock, jpeg: Data, options: DevelopOptions) throws -> RollItem {
+        // Deleted (or moved to Removed with Photos) while developing: don't write it back.
+        guard items.contains(where: { $0.id == item.id }) else { throw Failure.gone }
         let updated = RollItem(base: item.base, stockID: stock.id, date: item.date, folder: folder,
                                stamp: Date().timeIntervalSince1970)
         try jpeg.write(to: updated.url, options: .atomic)
         try JSONEncoder().encode(options).write(to: updated.recipeURL, options: .atomic)
-        if updated.url != item.url { try? FileManager.default.removeItem(at: item.url) }
+        // Exactly one print per frame: remove any other "<base>_<stock>.jpg" (an older stock's print).
+        for f in files(of: item.base, in: folder) where f.pathExtension == "jpg" && f != updated.url {
+            try? FileManager.default.removeItem(at: f)
+        }
         purgeThumbs(item)
         purgeThumbs(updated)
         if let i = items.firstIndex(where: { $0.id == item.id }) { items[i] = updated }
@@ -89,7 +114,9 @@ final class RollStore {
     }
 
     func delete(_ item: RollItem) {
-        for url in [item.url, item.negativeURL, item.recipeURL, item.photosURL, item.depthURL] { try? FileManager.default.removeItem(at: url) }
+        for url in [item.url, item.negativeURL, item.recipeURL, item.photosURL, item.depthURL, item.photosStaleURL] {
+            try? FileManager.default.removeItem(at: url)
+        }
         purgeThumbs(item)
         items.removeAll { $0.id == item.id }
     }
@@ -97,6 +124,14 @@ final class RollStore {
     /// The Photos asset this frame was saved as, if any.
     func photosID(for item: RollItem) -> String? {
         (try? String(contentsOf: item.photosURL, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Marks a frame's Photos copy as behind (kept on disk, so it survives the app closing).
+    func markPhotosStale(_ item: RollItem) { try? Data().write(to: item.photosStaleURL) }
+    func clearPhotosStale(_ item: RollItem) { try? FileManager.default.removeItem(at: item.photosStaleURL) }
+    /// Frames whose Photos copy needs updating.
+    func photosStaleItems() -> [RollItem] {
+        items.filter { FileManager.default.fileExists(atPath: $0.photosStaleURL.path) }
     }
 
     func setPhotosID(_ id: String?, for item: RollItem) {
@@ -307,17 +342,19 @@ enum PhotoLibrary {
     struct Edit { let assetID: String; let print: Data; let recipe: Data }
 
     /// Applies several prints to their Photos assets in one library change (one write, one iCloud sync) instead of
-    /// one per frame. Returns the ids of assets no longer in the library.
-    static func applyEdits(_ edits: [Edit]) async throws -> [String] {
-        guard !edits.isEmpty else { return [] }
+    /// one per frame. One asset failing to prepare (say, an iCloud download) doesn't sink the rest: it's simply not
+    /// in `done`, so the caller tries it again later. `missing`: assets no longer in the library.
+    static func applyEdits(_ edits: [Edit]) async throws -> (done: [String], missing: [String]) {
+        guard !edits.isEmpty else { return ([], []) }
         try await authorize()
         var missing: [String] = []
-        var prepared: [(PHAsset, PHContentEditingOutput)] = []
+        var prepared: [(PHAsset, PHContentEditingOutput, String)] = []
+        let fetch = PHFetchOptions(); fetch.includeHiddenAssets = true
         for e in edits {
-            guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [e.assetID], options: nil).firstObject else {
+            guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [e.assetID], options: fetch).firstObject else {
                 missing.append(e.assetID); continue
             }
-            let input: PHContentEditingInput = try await withCheckedThrowingContinuation { cont in
+            let input: PHContentEditingInput? = try? await withCheckedThrowingContinuation { cont in
                 let options = PHContentEditingInputRequestOptions()
                 options.isNetworkAccessAllowed = true
                 options.canHandleAdjustmentData = { $0.formatIdentifier == formatID }
@@ -326,16 +363,17 @@ enum PhotoLibrary {
                     else { cont.resume(throwing: (info[PHContentEditingInputErrorKey] as? Error) ?? Failure.missing) }
                 }
             }
+            guard let input else { continue }
             let output = PHContentEditingOutput(contentEditingInput: input)
             output.adjustmentData = PHAdjustmentData(formatIdentifier: formatID, formatVersion: "1", data: e.recipe)
-            try e.print.write(to: output.renderedContentURL, options: .atomic)
-            prepared.append((asset, output))
+            guard (try? e.print.write(to: output.renderedContentURL, options: .atomic)) != nil else { continue }
+            prepared.append((asset, output, e.assetID))
         }
-        guard !prepared.isEmpty else { return missing }
+        guard !prepared.isEmpty else { return ([], missing) }
         try await PHPhotoLibrary.shared().performChanges {
-            for (asset, output) in prepared { PHAssetChangeRequest(for: asset).contentEditingOutput = output }
+            for (asset, output, _) in prepared { PHAssetChangeRequest(for: asset).contentEditingOutput = output }
         }
-        return missing
+        return (prepared.map(\.2), missing)
     }
 
     static func exists(_ id: String) -> Bool {

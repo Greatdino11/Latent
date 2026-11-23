@@ -132,7 +132,7 @@ struct SettingsView: View {
             do {
                 let (added, stocks) = try await Task.detached(priority: .userInitiated) { try RollArchive.importArchive(url, into: folder) }.value
                 // Bring along stocks the roll was shot on that this phone doesn't have yet.
-                if let stocks, let customs = try? JSONDecoder().decode([CustomStock].self, from: stocks) {
+                if let stocks, let customs = try? CustomStock.tolerantList(from: stocks) {
                     for c in customs where !model.prefs.customStocks.contains(where: { $0.id == c.id }) { model.prefs.save(c) }
                 }
                 model.roll.reload()
