@@ -304,6 +304,40 @@ enum PhotoLibrary {
         }
     }
 
+    struct Edit { let assetID: String; let print: Data; let recipe: Data }
+
+    /// Applies several prints to their Photos assets in one library change (one write, one iCloud sync) instead of
+    /// one per frame. Returns the ids of assets no longer in the library.
+    static func applyEdits(_ edits: [Edit]) async throws -> [String] {
+        guard !edits.isEmpty else { return [] }
+        try await authorize()
+        var missing: [String] = []
+        var prepared: [(PHAsset, PHContentEditingOutput)] = []
+        for e in edits {
+            guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [e.assetID], options: nil).firstObject else {
+                missing.append(e.assetID); continue
+            }
+            let input: PHContentEditingInput = try await withCheckedThrowingContinuation { cont in
+                let options = PHContentEditingInputRequestOptions()
+                options.isNetworkAccessAllowed = true
+                options.canHandleAdjustmentData = { $0.formatIdentifier == formatID }
+                asset.requestContentEditingInput(with: options) { input, info in
+                    if let input { cont.resume(returning: input) }
+                    else { cont.resume(throwing: (info[PHContentEditingInputErrorKey] as? Error) ?? Failure.missing) }
+                }
+            }
+            let output = PHContentEditingOutput(contentEditingInput: input)
+            output.adjustmentData = PHAdjustmentData(formatIdentifier: formatID, formatVersion: "1", data: e.recipe)
+            try e.print.write(to: output.renderedContentURL, options: .atomic)
+            prepared.append((asset, output))
+        }
+        guard !prepared.isEmpty else { return missing }
+        try await PHPhotoLibrary.shared().performChanges {
+            for (asset, output) in prepared { PHAssetChangeRequest(for: asset).contentEditingOutput = output }
+        }
+        return missing
+    }
+
     static func exists(_ id: String) -> Bool {
         PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject != nil
     }

@@ -18,6 +18,7 @@ struct RollView: View {
                 PhotoPager(selection: Binding(get: { id }, set: { selected = $0 }),
                            close: { withAnimation(.easeOut(duration: 0.2)) { selected = nil } },
                            exit: { dismiss() })
+                    .onDisappear { model.flushPhotos() }       // closing the viewer: one Photos update per edited frame
                     .transition(.opacity)
             } else {
                 RollGrid(open: { id in withAnimation(.easeOut(duration: 0.2)) { selected = id } }, exit: { dismiss() })
@@ -216,7 +217,7 @@ private struct RollGrid: View {
                     .disabled(none)
                 Menu {
                     ForEach(model.prefs.orderedStocks) { stock in
-                        Button(stock.displayName) { run("Developing") { try await model.reprint($0, stock: stock) } }
+                        Button(stock.displayName) { run("Developing") { try await model.reprint($0, stock: stock, syncPhotos: false) } }
                     }
                 } label: { actionLabel("Develop as", "film", enabled: !none) }
                     .disabled(none)
@@ -339,6 +340,7 @@ private struct RollGrid: View {
                 if verb != "Saving", !item.hasNegative { failed += 1; continue }
                 do { _ = try await action(item) } catch { failed += 1 }
             }
+            model.flushPhotos(Set(items.map(\.id)))          // one Photos change for the whole batch
             status = failed == 0 ? "Done (\(items.count))" : "Done, \(failed) skipped"
             busy = false
             selecting = false
@@ -493,8 +495,9 @@ private struct PhotoPager: View {
             }
         }
         .onChange(of: selection, initial: true) { old, new in
-            // A push/pull still settling on the frame being left would be lost: develop it now.
-            if old != new { commitPendingPush(for: old) }
+            // A push/pull still settling on the frame being left would be lost: develop it now. Then the frame
+            // just left gets its single Photos update.
+            if old != new { commitPendingPush(for: old); model.flushPhotos([old]) }
             load()
         }
         .sheet(isPresented: Binding(get: { socialURL != nil }, set: { if !$0 { socialURL = nil } })) {
@@ -794,7 +797,7 @@ private struct PhotoPager: View {
         let (ex, sc, cr) = (expired, scanner, crisp)
         Task {
             do {
-                status = try await model.reprint(item, stock: stock) { o in
+                status = try await model.reprint(item, stock: stock, syncPhotos: false) { o in
                     o.strength = s; o.pushPull = p; o.aspect = a; o.dateStamp = d; o.frame = b
                     o.cropShift = cs == 0 ? nil : cs
                     o.lightLeak = lk > 0 ? lk : nil; o.dust = du ? true : nil
@@ -833,7 +836,10 @@ private struct PhotoPager: View {
         guard loadedFor == id, let left = model.roll.item(id: id), left.hasNegative,
               push != (model.roll.recipe(for: left).pushPull ?? 0) else { return }
         let p = push
-        Task { _ = try? await model.reprint(left) { $0.pushPull = p } }
+        Task {
+            _ = try? await model.reprint(left, syncPhotos: false) { $0.pushPull = p }
+            model.flushPhotos([id])
+        }
     }
 
     private func save(_ item: RollItem) {

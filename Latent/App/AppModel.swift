@@ -66,6 +66,7 @@ final class AppModel {
         didSet {
             updateSensors()
             if isActive && !oldValue { photosSync.refresh() }   // catch deletions made while we were away
+            if !isActive { flushPhotos() }                      // leaving: bring edited frames up to date in Photos
         }
     }
 
@@ -363,6 +364,30 @@ final class AppModel {
 
     // MARK: re-developing
 
+    /// Frames re-developed since their Photos copy was last updated.
+    @ObservationIgnored private var photosPending = Set<String>()
+
+    /// Brings the Photos copies of edited frames up to date in a single library change. `ids` nil: all of them.
+    func flushPhotos(_ ids: Set<String>? = nil) {
+        let due = ids.map { photosPending.intersection($0) } ?? photosPending
+        guard !due.isEmpty else { return }
+        photosPending.subtract(due)
+        let edits: [PhotoLibrary.Edit] = due.compactMap { id in
+            guard let item = roll.item(id: id), let pid = roll.photosID(for: item), let jpeg = try? Data(contentsOf: item.url) else { return nil }
+            return PhotoLibrary.Edit(assetID: pid, print: jpeg, recipe: (try? JSONEncoder().encode(roll.recipe(for: item))) ?? Data())
+        }
+        Task {
+            do {
+                let missing = try await PhotoLibrary.applyEdits(edits)
+                for pid in missing {
+                    if let item = roll.items.first(where: { roll.photosID(for: $0) == pid }) { roll.setPhotosID(nil, for: item) }
+                }
+            } catch {
+                show("Re-developed on the roll; couldn't update Photos: \(error.localizedDescription)")
+            }
+        }
+    }
+
     /// The stock a frame was printed on (its saved copy for the user's own stocks); nil if that stock is gone.
     func stock(for item: RollItem) -> FilmStock? {
         DevelopOptions.resolveStock(stockID: item.stockID, recipe: roll.recipe(for: item))
@@ -375,7 +400,9 @@ final class AppModel {
     /// strength, framing, texture). The frame keeps its own settings unless the edit changes them.
     /// If the frame was saved to Photos, that copy is updated in place. Returns a status line.
     @discardableResult
-    func reprint(_ item: RollItem, stock newStock: FilmStock? = nil, edit: (inout DevelopOptions) -> Void = { _ in }) async throws -> String {
+    /// `syncPhotos: false` (editing): the Photos copy is updated later in one go by `flushPhotos`, not per tweak.
+    func reprint(_ item: RollItem, stock newStock: FilmStock? = nil, syncPhotos: Bool = true,
+                 edit: (inout DevelopOptions) -> Void = { _ in }) async throws -> String {
         var options = roll.recipe(for: item)
         let changing = newStock.map { $0.id != item.stockID } ?? false
         guard let stock = changing ? newStock : DevelopOptions.resolveStock(stockID: item.stockID, recipe: options) else {
@@ -390,6 +417,10 @@ final class AppModel {
         let depth = try? Data(contentsOf: item.depthURL)
         let jpeg = try await Darkroom.shared.redevelop(negative: negative, depth: depth, metadata: metadata, stock: stock, options: options)
         let updated = try roll.replace(item, stock: stock, jpeg: jpeg, options: options)
+        if !syncPhotos {
+            if roll.photosID(for: updated) != nil { photosPending.insert(updated.id) }
+            return "Re-developed."
+        }
         if let id = roll.photosID(for: updated) {
             do {
                 try await PhotoLibrary.applyEdit(id: id, print: jpeg, recipe: (try? JSONEncoder().encode(options)) ?? Data())
