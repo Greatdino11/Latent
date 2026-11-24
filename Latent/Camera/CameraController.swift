@@ -681,6 +681,30 @@ final class CameraController: NSObject {
         }
     }
 
+    /// Split focus: focus only at `point` (device coordinates), leaving exposure where it is.
+    func setFocus(at point: CGPoint) {
+        Task { @MainActor in aeafLocked = false }
+        queue.async {
+            guard let d = self.device, d.isFocusPointOfInterestSupported, (try? d.lockForConfiguration()) != nil else { return }
+            d.focusPointOfInterest = point
+            if d.isFocusModeSupported(.autoFocus) { d.focusMode = .autoFocus }
+            d.isSubjectAreaChangeMonitoringEnabled = false        // stay where it was put
+            d.unlockForConfiguration()
+        }
+    }
+
+    /// Split exposure: meter only at `point` (device coordinates), leaving focus where it is.
+    func setExposure(at point: CGPoint) {
+        Task { @MainActor in aeafLocked = false }
+        queue.async {
+            guard let d = self.device, d.isExposurePointOfInterestSupported, (try? d.lockForConfiguration()) != nil else { return }
+            d.exposurePointOfInterest = point
+            if d.isExposureModeSupported(.continuousAutoExposure) { d.exposureMode = .continuousAutoExposure }
+            d.isSubjectAreaChangeMonitoringEnabled = false
+            d.unlockForConfiguration()
+        }
+    }
+
     /// Focuses and meters at `point` once, then holds both until the next tap (device coordinates).
     @MainActor
     func lock(at point: CGPoint) {

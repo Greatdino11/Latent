@@ -5,6 +5,9 @@ struct Viewfinder: View {
     @Environment(AppModel.self) private var model
     @State private var focusPoint: CGPoint?
     @State private var blink = false
+    /// Split focus and exposure (two-finger tap): where each marker sits in the viewfinder; nil = combined.
+    @State private var split: (focus: CGPoint, exposure: CGPoint)?
+    @State private var points = PreviewPoints()
 
     var body: some View {
         let prefs = model.prefs
@@ -18,7 +21,13 @@ struct Viewfinder: View {
                         AspectMask(frame: frame)
                         if prefs.showGrid { GridLines(frame: frame) }
                         if prefs.showLevel { LevelLine(tilt: model.level.tilt).position(x: frame.midX, y: frame.midY) }
-                        if let p = focusPoint { FocusReticle().position(p).allowsHitTesting(false) }
+                        if let p = focusPoint, split == nil { FocusReticle().position(p).allowsHitTesting(false) }
+                        if let s = split {
+                            SplitMarker(kind: .focus).position(s.focus)
+                                .gesture(drag(geo.size) { p in split?.focus = p; if let d = points.devicePoint(for: p) { model.camera.setFocus(at: d) } })
+                            SplitMarker(kind: .exposure).position(s.exposure)
+                                .gesture(drag(geo.size) { p in split?.exposure = p; if let d = points.devicePoint(for: p) { model.camera.setExposure(at: d) } })
+                        }
                         if model.camera.aeafLocked {
                             Text("AE/AF LOCK")
                                 .font(Theme.mono(10, .bold)).foregroundStyle(.black)
@@ -65,6 +74,7 @@ struct Viewfinder: View {
                         }
                         Color.black.opacity(blink ? 1 : 0).allowsHitTesting(false)
                     }
+                    .coordinateSpace(name: "viewfinder")
                     .animation(.snappy, value: prefs.aspect)
                 }
             }
@@ -88,9 +98,10 @@ struct Viewfinder: View {
                         .padding(6).background(.black.opacity(0.4)).padding(8)
                 }
         case .running:
-            CameraPreview(session: model.camera.session, onTap: { layer, device in
+            CameraPreview(session: model.camera.session, points: points, onTap: { layer, device in
                 // A panorama's locked exposure or a long exposure's manual settings mustn't be reset by a tap.
                 guard !model.captureBusy else { return }
+                split = nil                                     // one finger: back to combined focus and exposure
                 model.camera.focus(at: device)
                 focusPoint = layer
                 Task { try? await Task.sleep(for: .seconds(1.2)); focusPoint = nil }
@@ -99,9 +110,18 @@ struct Viewfinder: View {
                 Task { await model.camera.flip() }
             }, onLongPress: { layer, device in
                 guard !model.captureBusy else { return }
+                split = nil
                 model.camera.lock(at: device)
                 focusPoint = layer
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            }, onTwoFingerTap: { mid in
+                guard !model.captureBusy else { return }
+                // Two markers either side of where the fingers landed: square focuses, sun meters. Drag either.
+                let f = CGPoint(x: mid.x - 56, y: mid.y), e = CGPoint(x: mid.x + 56, y: mid.y)
+                split = (f, e)
+                if let d = points.devicePoint(for: f) { model.camera.setFocus(at: d) }
+                if let d = points.devicePoint(for: e) { model.camera.setExposure(at: d) }
+                Feedback.selection()
             })
         case .unauthorized:
             VStack(spacing: 12) {
@@ -176,6 +196,42 @@ private struct LevelLine: View {
         .opacity(abs(tilt) > 20 ? 0 : 1)
         .animation(.easeOut(duration: 0.1), value: level)
         .allowsHitTesting(false)
+    }
+}
+
+extension Viewfinder {
+    /// Dragging a split marker: follows the finger inside the viewfinder, and re-aims as it moves (throttled by
+    /// the drag's own rate), so the picture responds while you drag.
+    fileprivate func drag(_ size: CGSize, _ moved: @escaping (CGPoint) -> Void) -> some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .named("viewfinder"))
+            .onChanged { g in
+                guard !model.captureBusy else { return }
+                moved(CGPoint(x: min(max(g.location.x, 24), size.width - 24), y: min(max(g.location.y, 24), size.height - 24)))
+            }
+            .onEnded { _ in Feedback.selection() }
+    }
+}
+
+/// A split marker: square for focus, circle with a sun for exposure.
+private struct SplitMarker: View {
+    enum Kind { case focus, exposure }
+    let kind: Kind
+    var body: some View {
+        ZStack {
+            switch kind {
+            case .focus:
+                RoundedRectangle(cornerRadius: 3).stroke(Theme.amber, lineWidth: 1.5).frame(width: 60, height: 60)
+                Text("AF").font(Theme.mono(9, .bold)).foregroundStyle(Theme.amber).offset(y: -40)
+            case .exposure:
+                Circle().stroke(Color.yellow, lineWidth: 1.5).frame(width: 60, height: 60)
+                Image(systemName: "sun.max.fill").font(.system(size: 14, weight: .semibold)).foregroundStyle(Color.yellow)
+                Text("AE").font(Theme.mono(9, .bold)).foregroundStyle(Color.yellow).offset(y: -40)
+            }
+        }
+        .frame(width: 84, height: 84)           // a comfortable target to drag
+        .contentShape(Rectangle())
+        .shadow(color: .black.opacity(0.5), radius: 2)
+        .accessibilityLabel(kind == .focus ? "Focus point, drag to move" : "Exposure point, drag to move")
     }
 }
 

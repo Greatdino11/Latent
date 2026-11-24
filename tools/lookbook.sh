@@ -15,7 +15,8 @@ xcrun simctl install "$SIM" build/DerivedData/Build/Products/Debug-iphonesimulat
 xcrun simctl terminate "$SIM" $BUNDLE 2>/dev/null || true
 DATA=$(xcrun simctl get_app_container "$SIM" $BUNDLE data)
 rm -rf "$DATA/Documents/Roll" "$DATA/Documents/DemoInput"; mkdir -p "$DATA/Documents/DemoInput"
-if [[ -d tools/lookbook-input ]]; then cp tools/lookbook-input/* "$DATA/Documents/DemoInput/"
+IN=${LOOKBOOK_INPUT:-tools/lookbook-input}
+if [[ -d $IN ]]; then cp $IN/* "$DATA/Documents/DemoInput/"
 else cp ~/Library/Developer/CoreSimulator/Devices/$SIM/data/Media/DCIM/100APPLE/IMG_000{1,3,5}.* "$DATA/Documents/DemoInput/"; fi
 N=$(ls "$DATA/Documents/DemoInput" | wc -l | tr -d ' ')
 EXPECT=$(( N * (${#FLAG} > 0 ? 4 : 10) ))
