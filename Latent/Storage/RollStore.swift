@@ -302,6 +302,18 @@ enum PhotoLibrary {
         guard status == .authorized || status == .limited else { throw Failure.denied }
     }
 
+    /// Deletes these assets from the library (they go to Photos' Recently Deleted, after iOS asks the user).
+    /// Returns how many were found; throws if the user says no.
+    @discardableResult
+    static func delete(ids: [String]) async throws -> Int {
+        guard !ids.isEmpty else { return 0 }
+        let fetch = PHFetchOptions(); fetch.includeHiddenAssets = true
+        let assets = PHAsset.fetchAssets(withLocalIdentifiers: ids, options: fetch)
+        guard assets.count > 0 else { return 0 }
+        try await PHPhotoLibrary.shared().performChanges { PHAssetChangeRequest.deleteAssets(assets) }
+        return assets.count
+    }
+
     /// Adds a new asset and returns its local identifier.
     static func create(print: Data, original: Data?, recipe: Data, location: CLLocation?, date: Date) async throws -> String {
         try await authorize()

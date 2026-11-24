@@ -507,13 +507,62 @@ final class LongExposureTests: XCTestCase {
         return px[1]
     }
 
+    /// A running sum as the stacker builds it: colour and coverage (alpha) both add up.
+    private func stacked(_ values: [Double]) -> CIImage {
+        values.map(flat).reduce(nil as CIImage?) { acc, f in
+            acc.map { f.applyingFilter("CIAdditionCompositing", parameters: [kCIInputBackgroundImageKey: $0]) } ?? f
+        }!
+    }
+
     /// Four frames of a dim wall average to the wall; a headlight that passed once survives as a trail.
     func testTrailsKeepPassingLights() {
-        let wallSum = flat(0.4), wallMax = flat(0.12)                       // 4 × 0.1
+        let wallSum = stacked([0.1, 0.1, 0.1, 0.1]), wallMax = flat(0.12)
         XCTAssertEqual(value(LongExposure.blend(sum: wallSum, max: wallMax, count: 4, trails: true)), 0.1, accuracy: 0.003)
-        let lightSum = flat(1.3), lightMax = flat(1.0)                      // 0.1 × 3 + a 1.0 headlight
+        let lightSum = stacked([0.1, 0.1, 0.1, 1.0]), lightMax = flat(1.0)  // a headlight passed once
         XCTAssertEqual(value(LongExposure.blend(sum: lightSum, max: lightMax, count: 4, trails: true)), 1.0, accuracy: 0.01)
         XCTAssertEqual(value(LongExposure.blend(sum: lightSum, max: lightMax, count: 4, trails: false)), 0.325, accuracy: 0.003)
+    }
+
+    /// Where only some frames reached (the edges of a handheld stack), the average is over those frames only, not
+    /// darkened by the ones that missed.
+    func testEdgesAverageOnlyTheFramesThatReached() {
+        let clear = CIImage(color: .clear).cropped(to: CGRect(x: 0, y: 0, width: 8, height: 8))
+        let sum = [flat(0.3), flat(0.3), clear, clear].reduce(nil as CIImage?) { acc, f in
+            acc.map { f.applyingFilter("CIAdditionCompositing", parameters: [kCIInputBackgroundImageKey: $0]) } ?? f
+        }!
+        XCTAssertEqual(value(LongExposure.blend(sum: sum, max: flat(0.3), count: 4, trails: false)), 0.3, accuracy: 0.003)
+    }
+
+    /// A frame the hand moved is put back where the first frame was.
+    func testAlignerUndoesHandShake() {
+        let size = CGRect(x: 0, y: 0, width: 1024, height: 768)
+        // Something with detail to lock onto: a few bright blocks over blurred noise.
+        var scene = CIFilter(name: "CIRandomGenerator")!.outputImage!.applyingGaussianBlur(sigma: 3)
+            .applyingFilter("CIColorControls", parameters: [kCIInputContrastKey: 25])
+            .applyingFilter("CIColorClamp")
+        for (i, r) in [CGRect(x: 120, y: 90, width: 160, height: 120), CGRect(x: 600, y: 420, width: 220, height: 90),
+                       CGRect(x: 380, y: 200, width: 60, height: 260)].enumerated() {
+            scene = CIImage(color: CIColor(red: 1, green: Double(i) / 3, blue: 0.2)).cropped(to: r).composited(over: scene)
+        }
+        // The camera sees a full frame each time; the hand moved it 17 px right and 11 px down.
+        let moved = scene.transformed(by: CGAffineTransform(translationX: 17, y: -11)).cropped(to: size)
+        scene = scene.cropped(to: size)
+        let aligner = FrameAligner()
+        _ = aligner.align(scene)
+        let back = aligner.align(moved)
+        XCTAssertEqual(aligner.failures, 0)
+        XCTAssertEqual(aligner.last.tx, -17, accuracy: 1.5); XCTAssertEqual(aligner.last.ty, 11, accuracy: 1.5)
+        // Compare the middle of the frame (the edges of the moved frame are empty).
+        let probe = CGRect(x: 200, y: 150, width: 600, height: 450)
+        func diff(_ a: CIImage, _ b: CIImage) -> Float {
+            let d = a.applyingFilter("CIColorAbsoluteDifference", parameters: ["inputImage2": b])
+                .applyingFilter("CIAreaAverage", parameters: [kCIInputExtentKey: CIVector(cgRect: probe)])
+            var px = [Float](repeating: 0, count: 4)
+            CIContext().render(d, toBitmap: &px, rowBytes: 16, bounds: CGRect(x: 0, y: 0, width: 1, height: 1), format: .RGBAf, colorSpace: linear)
+            return (px[0] + px[1] + px[2]) / 3
+        }
+        let before = diff(moved, scene), after = diff(back, scene)
+        XCTAssertLessThan(after, before * 0.35, "before \(before), after \(after)")
     }
 
     func testShutterLabels() {

@@ -362,11 +362,12 @@ final class CameraController: NSObject {
                         cont.resume(with: result.map { ($0.sum, $0.max, $0.count) })
                     }
                 }
-                // Each frame as long as the sensor and frame rate allow at base ISO (long, clean frames make
-                // unbroken light trails at night); short frames at a steady 30 fps in bright light.
+                // Frames at base ISO up to 1/15 s each: short enough that a hand doesn't smear one frame (so the
+                // aligner can line them up) and back to back, so light trails stay unbroken. Many short frames
+                // averaged are as clean as a few long ones.
                 let product = Self.meteredProduct(d)
                 let minFps = Double(d.activeFormat.videoSupportedFrameRateRanges.map(\.minFrameRate).min() ?? 1)
-                let longest = min(d.activeFormat.maxExposureDuration.seconds, 1 / max(minFps, 1), 0.5)
+                let longest = min(d.activeFormat.maxExposureDuration.seconds, 1 / max(minFps, 1), 1.0 / 15)
                 let exposure = (product / Double(d.activeFormat.minISO)).clamped(d.activeFormat.minExposureDuration.seconds, longest)
                 let frame = max(exposure, 1.0 / 30)
                 let iso = Float(product / exposure).clamped(d.activeFormat.minISO, d.activeFormat.maxISO)

@@ -519,6 +519,25 @@ final class AppModel {
         return url
     }
 
+    /// Clean out: deletes frames from Latent (print, negative, recipe, depth) and their saved copies from Photos.
+    /// Photos asks first and keeps its copies in Recently Deleted for 30 days; if the user says no there, nothing
+    /// is deleted anywhere. Returns what happened, for the status line.
+    func deleteEverywhere(_ items: [RollItem]) async -> String {
+        let ids = items.compactMap { roll.photosID(for: $0) }
+        var inPhotos = 0
+        if !ids.isEmpty {
+            do {
+                try await PhotoLibrary.authorize()
+                inPhotos = try await PhotoLibrary.delete(ids: ids)
+            } catch {
+                return "Nothing deleted"                    // the Photos prompt was declined (or access is off)
+            }
+        }
+        for item in items { roll.delete(item) }
+        let frames = items.count == 1 ? "1 frame" : "\(items.count) frames"
+        return inPhotos > 0 ? "Deleted \(frames) · \(inPhotos) from Photos" : "Deleted \(frames)"
+    }
+
     /// Saves a frame to Photos: updates its existing copy, or adds a new one.
     func saveToPhotos(_ item: RollItem) async throws -> String {
         let jpeg = try Data(contentsOf: item.url)

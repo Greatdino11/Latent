@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreImage
+import Vision
 
 /// Exposures longer than the sensor allows in one go (about 1 s on iPhone), made by stacking a continuous run of
 /// video frames — the way Night mode and long-exposure apps do it.
@@ -17,10 +18,9 @@ enum LongExposure {
     /// wherever a pixel was ever bright (a passing headlight) it keeps that brightest moment, so moving lights draw
     /// solid lines instead of fading into the average.
     static func blend(sum: CIImage, max: CIImage, count: Int, trails: Bool) -> CIImage {
-        let k = CGFloat(1) / CGFloat(Swift.max(count, 1))
-        let mean = sum.applyingFilter("CIColorMatrix", parameters: [
-            "inputRVector": CIVector(x: k, y: 0, z: 0, w: 0), "inputGVector": CIVector(x: 0, y: k, z: 0, w: 0),
-            "inputBVector": CIVector(x: 0, y: 0, z: k, w: 0), "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1)])
+        // Aligned frames don't all cover the edges, so each pixel is divided by how many frames reached it: the sum's
+        // alpha counts them (every frame adds 1 where it landed, 0 where it didn't).
+        let mean = sum.applyingFilter("CIUnpremultiply").settingAlphaOne(in: sum.extent)
         guard trails else { return mean }
         // Weight: 0 below 0.3 luminance, 1 above 0.75 (a ramp on the brightest moment).
         let a = 1 / 0.45, b = -0.3 / 0.45
@@ -32,6 +32,48 @@ enum LongExposure {
                                                          "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)])
         return max.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: mean, kCIInputMaskImageKey: weight])
             .cropped(to: sum.extent)
+    }
+}
+
+/// Lines each frame of a handheld long exposure up with the first one, so the shake of a hand cancels out and only
+/// what really moved (water, people, car lights) blurs — the way handheld long-exposure apps such as ReeHeld work.
+/// Registration runs on a small greyscale copy and the shift it finds is scaled back up. Only shifts are corrected:
+/// over a few seconds a hand mostly drifts and jitters, and Vision's shift estimate is far steadier than its full
+/// perspective one on real scenes.
+final class FrameAligner {
+    /// Width of the copy registration runs on: small enough to keep up with the frame rate, big enough that its
+    /// whole-pixel steps are about 2 full-size pixels.
+    private let workWidth: CGFloat
+    private var reference: CGImage?
+    private(set) var last = CGAffineTransform.identity
+    private(set) var failures = 0
+    private let ctx = CIContext(options: [.cacheIntermediates: false])
+
+    init(workWidth: CGFloat = 768) { self.workWidth = workWidth }
+
+    /// The frame moved onto the first frame's position. Clear where the moved frame doesn't reach.
+    func align(_ frame: CIImage) -> CIImage {
+        let e = frame.extent
+        let s = min(1, workWidth / e.width)
+        // Rendered to a whole-pixel greyscale bitmap (Vision rejects a fractional region of a CIImage).
+        let box = CGRect(x: 0, y: 0, width: (e.width * s).rounded(.down), height: (e.height * s).rounded(.down))
+        let small = frame.transformed(by: CGAffineTransform(scaleX: s, y: s).translatedBy(x: -e.minX, y: -e.minY))
+            .applyingFilter("CIPhotoEffectMono")
+        guard let bitmap = ctx.createCGImage(small, from: box) else { failures += 1; return Self.shift(frame, by: last) }
+        guard let reference else { self.reference = bitmap; return frame }
+        let request = VNTranslationalImageRegistrationRequest(targetedCGImage: bitmap)
+        if (try? VNImageRequestHandler(cgImage: reference).perform([request])) != nil,
+           let t = (request.results?.first as? VNImageTranslationAlignmentObservation)?.alignmentTransform,
+           abs(t.tx) < 0.12 * box.width, abs(t.ty) < 0.12 * box.height {
+            last = CGAffineTransform(translationX: t.tx / s, y: t.ty / s)
+        } else {
+            failures += 1                                  // a blank or blurred frame: assume it sits like the last
+        }
+        return Self.shift(frame, by: last)
+    }
+
+    static func shift(_ frame: CIImage, by t: CGAffineTransform) -> CIImage {
+        frame.transformed(by: t).cropped(to: frame.extent)
     }
 }
 
@@ -50,9 +92,12 @@ final class FrameStacker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     private var flip = 0
     private(set) var count = 0
     private var finished = false
+    /// Lines frames up when handheld; nil for a frame-for-frame stack (tests, a phone on a tripod).
+    private let aligner: FrameAligner?
 
-    init(seconds: Double, progress: @escaping (Double) -> Void, done: @escaping (Result<(sum: CIImage, max: CIImage, count: Int), Error>) -> Void) {
+    init(seconds: Double, align: Bool = true, progress: @escaping (Double) -> Void, done: @escaping (Result<(sum: CIImage, max: CIImage, count: Int), Error>) -> Void) {
         self.seconds = seconds
+        self.aligner = align ? FrameAligner() : nil
         self.onProgress = progress
         self.onDone = done
     }
@@ -62,8 +107,9 @@ final class FrameStacker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         let t = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         if notBefore.isValid, t < notBefore { return }
         if first == nil { first = t }
-        let frame = CIImage(cvPixelBuffer: pb)
-        let e = frame.extent
+        let raw = CIImage(cvPixelBuffer: pb)
+        let e = raw.extent
+        let frame = aligner?.align(raw) ?? raw
         if buffers.isEmpty {
             let attrs: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary]
             // Even slots hold the running sum in 32-bit float (half floats drift after hundreds of frames); odd

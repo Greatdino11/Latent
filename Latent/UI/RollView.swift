@@ -212,12 +212,31 @@ private struct RollGrid: View {
                 }
             }
         }
-        .confirmationDialog("Delete \(chosen.count) frames and their negatives?", isPresented: $confirmDelete, titleVisibility: .visible) {
-            Button("Delete", role: .destructive) {
+        .confirmationDialog("Delete \(chosen.count == 1 ? "1 frame" : "\(chosen.count) frames") and \(chosen.count == 1 ? "its negative" : "their negatives")?",
+                            isPresented: $confirmDelete, titleVisibility: .visible) {
+            let linked = chosenItems.filter { model.roll.photosID(for: $0) != nil }.count
+            if linked > 0 {
+                Button("Delete from Latent and Photos", role: .destructive) {
+                    let items = chosenItems
+                    busy = true; status = "Deleting…"
+                    Task {
+                        status = await model.deleteEverywhere(items)
+                        busy = false; chosen = []; selecting = false
+                    }
+                }
+            }
+            Button(linked > 0 ? "Delete from Latent only" : "Delete", role: .destructive) {
                 for item in chosenItems { model.roll.delete(item) }
                 chosen = []; selecting = false
             }
-        } message: { Text("Copies already saved to Photos are kept.") }
+        } message: {
+            let linked = chosenItems.filter { model.roll.photosID(for: $0) != nil }.count
+            if linked > 0 {
+                Text("\(linked) of these \(linked == 1 ? "is" : "are") saved in Photos. Deleting from Photos too moves \(linked == 1 ? "it" : "them") to Recently Deleted there. Negatives can't be recovered.")
+            } else {
+                Text("Negatives can't be recovered.")
+            }
+        }
     }
 
     /// What you can do with the selected frames, all in view.
