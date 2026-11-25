@@ -85,7 +85,7 @@ final class AppModel {
         }
         updateSensors()
         photosSync.refresh()
-        flushPhotos()           // Photos updates left over from last time
+        Task { await recoverLostPrints() }      // then updates Photos too
         orientation.start()
         // Build the look tables in the background so the first frame on each stock develops quickly.
         let stocks = prefs.visibleStocks
@@ -517,6 +517,29 @@ final class AppModel {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("Latent contact sheet \(f.string(from: Date())).jpg")
         try jpeg.write(to: url, options: .atomic)
         return url
+    }
+
+    /// Frames whose print a re-develop deleted by mistake (fixed bug) are re-made from their negatives, on the stock
+    /// saved with the frame or else the current one, so they come back on the roll and in Photos.
+    func recoverLostPrints() async {
+        var recovered = 0
+        for (base, date) in roll.printlessNegatives() {
+            let recipeURL = roll.folderURL.appendingPathComponent("\(base).recipe.json")
+            let defaults = DevelopOptions(date: date)
+            var options = (try? Data(contentsOf: recipeURL)).flatMap { try? DevelopOptions.tolerant(from: $0, defaults: defaults) } ?? defaults
+            let stock = options.customStock?.stock ?? prefs.resolveStock()
+            if options.customStock == nil { options.customStock = snapshot(of: stock) }
+            guard let negative = try? Data(contentsOf: roll.folderURL.appendingPathComponent("\(base).neg.heic")) else { continue }
+            let depth = try? Data(contentsOf: roll.folderURL.appendingPathComponent("\(base).depth.png"))
+            do {
+                let jpeg = try await Darkroom.shared.redevelop(negative: negative, depth: depth, metadata: [:], stock: stock, options: options)
+                let item = try roll.restorePrint(base: base, date: date, stock: stock, jpeg: jpeg, options: options)
+                if roll.photosID(for: item) != nil { roll.markPhotosStale(item) }
+                recovered += 1
+            } catch { continue }
+        }
+        flushPhotos()           // Photos updates left over from last time (and for recovered frames)
+        if recovered > 0 { show("Recovered \(recovered) frame\(recovered == 1 ? "" : "s") from \(recovered == 1 ? "its negative" : "their negatives")") }
     }
 
     /// Clean out: deletes frames from Latent (print, negative, recipe, depth) and their saved copies from Photos.

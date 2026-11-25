@@ -104,7 +104,9 @@ final class RollStore {
         try jpeg.write(to: updated.url, options: .atomic)
         try JSONEncoder().encode(options).write(to: updated.recipeURL, options: .atomic)
         // Exactly one print per frame: remove any other "<base>_<stock>.jpg" (an older stock's print).
-        for f in files(of: item.base, in: folder) where f.pathExtension == "jpg" && f != updated.url {
+        // Compared by name: on a device the listed URLs and `updated.url` can spell the same file differently
+        // (/private/var vs /var), and comparing whole URLs deleted the print just written.
+        for f in files(of: item.base, in: folder) where f.pathExtension == "jpg" && f.lastPathComponent != updated.url.lastPathComponent {
             try? FileManager.default.removeItem(at: f)
         }
         purgeThumbs(item)
@@ -119,6 +121,26 @@ final class RollStore {
         }
         purgeThumbs(item)
         items.removeAll { $0.id == item.id }
+    }
+
+    /// Frames that have a negative but lost their print (left that way by an old bug): base names and dates.
+    func printlessNegatives() -> [(base: String, date: Date)] {
+        let names = ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []).map(\.lastPathComponent)
+        let printed = Set(names.filter { $0.hasSuffix(".jpg") }.compactMap { $0.split(separator: "_").first.map(String.init) })
+        return names.filter { $0.hasSuffix(".neg.heic") }
+            .map { String($0.dropLast(".neg.heic".count)) }
+            .filter { !printed.contains($0) }
+            .compactMap { base in Double(base).map { (base, Date(timeIntervalSince1970: $0 / 1000)) } }
+    }
+
+    /// Puts a re-made print back for a frame that lost it, and brings the frame back onto the roll.
+    @discardableResult
+    func restorePrint(base: String, date: Date, stock: FilmStock, jpeg: Data, options: DevelopOptions) throws -> RollItem {
+        let item = RollItem(base: base, stockID: stock.id, date: date, folder: folder, stamp: Date().timeIntervalSince1970)
+        try jpeg.write(to: item.url, options: .atomic)
+        try JSONEncoder().encode(options).write(to: item.recipeURL, options: .atomic)
+        reload()
+        return item
     }
 
     /// The Photos asset this frame was saved as, if any.

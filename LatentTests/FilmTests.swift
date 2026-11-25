@@ -837,6 +837,42 @@ final class RollStoreFlowTests: XCTestCase {
         XCTAssertTrue(updated.hasNegative, "the negative is untouched")
         XCTAssertGreaterThan(updated.stamp, item.stamp)
     }
+
+    /// On a phone the roll folder is reached through a symlink (/var → /private/var), so listed files are spelled
+    /// differently from the frame's own URLs. A re-develop must still keep the print it just wrote.
+    func testRedevelopKeepsPrintThroughSymlinkedFolder() throws {
+        let fm = FileManager.default
+        let real = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let link = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: real, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(at: link, withDestinationURL: real)
+        defer { try? fm.removeItem(at: link); try? fm.removeItem(at: real) }
+        let roll = RollStore(folder: link.appendingPathComponent("Roll"))
+        let item = try roll.add(DevelopResult(jpeg: Data([1]), negative: Data([9]), options: DevelopOptions(), depth: nil), stock: .honey)
+        let same = try roll.replace(item, stock: .honey, jpeg: Data([2]), options: DevelopOptions())
+        XCTAssertEqual(try Data(contentsOf: same.url), Data([2]), "same stock: the new print is kept")
+        let other = try roll.replace(same, stock: .coast, jpeg: Data([3]), options: DevelopOptions())
+        XCTAssertEqual(try Data(contentsOf: other.url), Data([3]), "new stock: the new print is kept")
+        XCTAssertFalse(fm.fileExists(atPath: same.url.path), "the old stock's print is removed")
+        XCTAssertTrue(roll.printlessNegatives().isEmpty)
+        roll.reload()
+        XCTAssertEqual(roll.items.map(\.id), [item.id])
+    }
+
+    /// A frame that lost its print is found (so it can be re-made) and comes back once restored.
+    func testPrintlessNegativeIsFoundAndRestored() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let roll = RollStore(folder: dir)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let item = try roll.add(DevelopResult(jpeg: Data([1]), negative: Data([9]), options: DevelopOptions(), depth: nil), stock: .honey)
+        try FileManager.default.removeItem(at: item.url)
+        roll.reload()
+        XCTAssertTrue(roll.items.isEmpty)
+        XCTAssertEqual(roll.printlessNegatives().map(\.base), [item.base])
+        try roll.restorePrint(base: item.base, date: item.date, stock: .coast, jpeg: Data([5]), options: DevelopOptions())
+        XCTAssertEqual(roll.items.map(\.id), [item.id])
+        XCTAssertTrue(roll.printlessNegatives().isEmpty)
+    }
 }
 
 final class TolerantSaveTests: XCTestCase {
