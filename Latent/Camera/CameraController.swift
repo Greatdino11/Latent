@@ -706,6 +706,24 @@ final class CameraController: NSObject {
         }
     }
 
+    /// Back to the camera's own choice: continuous focus and exposure over the middle of the frame, following the
+    /// scene again (undoes a tap, a split, or an AE/AF lock).
+    @MainActor
+    func resetToAuto() {
+        aeafLocked = false
+        guard !isSimulated else { return }
+        queue.async {
+            guard let d = self.device, (try? d.lockForConfiguration()) != nil else { return }
+            let centre = CGPoint(x: 0.5, y: 0.5)
+            if d.isFocusPointOfInterestSupported { d.focusPointOfInterest = centre }
+            if d.isFocusModeSupported(.continuousAutoFocus) { d.focusMode = .continuousAutoFocus }
+            if d.isExposurePointOfInterestSupported { d.exposurePointOfInterest = centre }
+            if d.isExposureModeSupported(.continuousAutoExposure) { d.exposureMode = .continuousAutoExposure }
+            d.isSubjectAreaChangeMonitoringEnabled = false
+            d.unlockForConfiguration()
+        }
+    }
+
     /// Focuses and meters at `point` once, then holds both until the next tap (device coordinates).
     @MainActor
     func lock(at point: CGPoint) {

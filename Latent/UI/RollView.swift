@@ -537,8 +537,18 @@ private struct PhotoPager: View {
             if let socialURL { ShareSheet(items: [socialURL]).presentationDetents([.medium, .large]) }
         }
         .confirmationDialog("Delete this frame and its negative?", isPresented: $confirmDelete, titleVisibility: .visible) {
-            Button("Delete", role: .destructive) { deleteCurrent() }
-        } message: { Text("Copies already saved to Photos are kept.") }
+            let linked = item.map { model.roll.photosID(for: $0) != nil } ?? false
+            if linked {
+                Button("Delete from Latent and Photos", role: .destructive) { deleteCurrent(everywhere: true) }
+            }
+            Button(linked ? "Delete from Latent only" : "Delete", role: .destructive) { deleteCurrent(everywhere: false) }
+        } message: {
+            if let item, model.roll.photosID(for: item) != nil {
+                Text("It's saved in Photos. Deleting from Photos too moves it to Recently Deleted there. Negatives can't be recovered.")
+            } else {
+                Text("Negatives can't be recovered.")
+            }
+        }
     }
 
     // MARK: pieces
@@ -881,12 +891,19 @@ private struct PhotoPager: View {
         }
     }
 
-    private func deleteCurrent() {
+    /// `everywhere`: also moves its Photos copy to Recently Deleted (same as deleting from the roll's selection).
+    private func deleteCurrent(everywhere: Bool) {
         guard let item, let index = model.roll.items.firstIndex(where: { $0.id == item.id }) else { return }
         let items = model.roll.items
         let neighbour = index + 1 < items.count ? items[index + 1].id : (index > 0 ? items[index - 1].id : nil)
-        model.roll.delete(item)
-        if let neighbour { selection = neighbour } else { close() }
+        let moveOn = { if let neighbour { selection = neighbour } else { close() } }
+        guard everywhere else { model.roll.delete(item); moveOn(); return }
+        status = "Deleting…"
+        Task {
+            let result = await model.deleteEverywhere([item])
+            // If Photos said no, nothing was deleted: stay on the frame and say why.
+            if model.roll.items.contains(where: { $0.id == item.id }) { status = result } else { status = nil; moveOn() }
+        }
     }
 }
 

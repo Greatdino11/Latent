@@ -8,6 +8,8 @@ struct Viewfinder: View {
     /// Split focus and exposure (two-finger tap): where each marker sits in the viewfinder; nil = combined.
     @State private var split: (focus: CGPoint, exposure: CGPoint)?
     @State private var points = PreviewPoints()
+    /// Focus or exposure was put somewhere by hand (tap, lock or split): offer the way back to automatic.
+    @State private var pointSet = false
 
     var body: some View {
         let prefs = model.prefs
@@ -35,6 +37,29 @@ struct Viewfinder: View {
                                 .background(Theme.amber, in: Capsule())
                                 .position(x: frame.midX, y: frame.minY + 18)
                                 .allowsHitTesting(false)
+                        }
+                        if pointSet || split != nil || model.camera.aeafLocked {
+                            Button {
+                                split = nil; focusPoint = nil; pointSet = false
+                                model.camera.resetToAuto()
+                                Feedback.selection()
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "arrow.counterclockwise").font(.system(size: 10, weight: .bold))
+                                    Text("AUTO").font(Theme.mono(10, .bold))
+                                }
+                                .foregroundStyle(Theme.amber)
+                                .padding(.horizontal, 10).padding(.vertical, 6)
+                                .background(.black.opacity(0.55), in: Capsule())
+                                .overlay(Capsule().stroke(Theme.amber.opacity(0.6), lineWidth: 1))
+                                .padding(8)                              // a bigger target than it looks
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Back to automatic focus and exposure")
+                            .position(x: frame.minX + 48, y: frame.minY + 24)
+                            .disabled(model.captureBusy)
+                            .transition(.opacity)
                         }
                         if prefs.panoMode {
                             PanoGuide(frame: frame)
@@ -102,15 +127,18 @@ struct Viewfinder: View {
                 // A panorama's locked exposure or a long exposure's manual settings mustn't be reset by a tap.
                 guard !model.captureBusy else { return }
                 split = nil                                     // one finger: back to combined focus and exposure
+                pointSet = true
                 model.camera.focus(at: device)
                 focusPoint = layer
                 Task { try? await Task.sleep(for: .seconds(1.2)); focusPoint = nil }
             }, onDoubleTap: {
                 guard !model.captureBusy else { return }
+                pointSet = false; split = nil                   // the other camera starts on automatic
                 Task { await model.camera.flip() }
             }, onLongPress: { layer, device in
                 guard !model.captureBusy else { return }
                 split = nil
+                pointSet = true
                 model.camera.lock(at: device)
                 focusPoint = layer
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
@@ -119,6 +147,7 @@ struct Viewfinder: View {
                 // Two markers either side of where the fingers landed: square focuses, sun meters. Drag either.
                 let f = CGPoint(x: mid.x - 56, y: mid.y), e = CGPoint(x: mid.x + 56, y: mid.y)
                 split = (f, e)
+                pointSet = true
                 if let d = points.devicePoint(for: f) { model.camera.setFocus(at: d) }
                 if let d = points.devicePoint(for: e) { model.camera.setExposure(at: d) }
                 Feedback.selection()

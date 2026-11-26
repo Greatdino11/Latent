@@ -100,6 +100,17 @@ struct LookDrawer: View {
                 }
                 .disabled(model.captureBusy).opacity(model.captureBusy ? 0.45 : 1)
 
+                group("RAW", note: prefs.zeroProcess
+                      ? "ZERO: one frame straight off the sensor, no Apple processing. Real sensor grain, softer and truer; 12MP, noisier in low light, highlights clip sooner."
+                      : "48MP uses the 1× camera: about 75 MB a photo and slower to develop. ZERO skips Apple's processing entirely.") {
+                    chips {
+                        LookChip(title: "12MP", on: !prefs.highResolution && !prefs.zeroProcess) { setCapture(highRes: false, zero: false) }
+                        LookChip(title: "48MP", on: prefs.highResolution && !prefs.zeroProcess) { setCapture(highRes: true, zero: false) }
+                        LookChip(title: "ZERO", on: prefs.zeroProcess) { setCapture(highRes: false, zero: true) }
+                    }
+                }
+                .disabled(model.captureBusy).opacity(model.captureBusy ? 0.45 : 1)
+
                 group("FILM") {
                     if let stock {
                         LookSlider(title: "STRENGTH", value: Binding(get: { prefs.strength(for: stock) },
@@ -173,17 +184,6 @@ struct LookDrawer: View {
                     }
                     LookSlider(title: "BLUR", value: $prefs.blurAmount, range: 0.1...1, label: LookLabels.percent)
                 }
-
-                group("RAW", note: prefs.zeroProcess
-                      ? "ZERO: one frame straight off the sensor, no Apple processing. Real sensor grain, softer and truer; 12MP, noisier in low light, highlights clip sooner."
-                      : "48MP uses the 1× camera: about 75 MB a photo and slower to develop. ZERO skips Apple's processing entirely.") {
-                    chips {
-                        LookChip(title: "12MP", on: !prefs.highResolution && !prefs.zeroProcess) { setCapture(highRes: false, zero: false) }
-                        LookChip(title: "48MP", on: prefs.highResolution && !prefs.zeroProcess) { setCapture(highRes: true, zero: false) }
-                        LookChip(title: "ZERO", on: prefs.zeroProcess) { setCapture(highRes: false, zero: true) }
-                    }
-                }
-                .disabled(model.captureBusy).opacity(model.captureBusy ? 0.45 : 1)
 
                 Text("To change a photo you've already taken, open it in the roll.")
                     .font(.caption).foregroundStyle(Theme.dim)

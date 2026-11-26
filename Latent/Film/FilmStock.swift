@@ -102,7 +102,8 @@ extension FilmStock {
     }()
 
     static let all: [FilmStock] = [honey, coast, valley, pine, dusk, twilight, night, reel, sunny, cross, bypass, clear,
-                                   silver, umber, noir]
+                                   gold, portrait, vivid, verde, mint, slide,
+                                   silver, umber, noir, press]
 
     /// Built-in and custom stocks.
     static func with(id: String) -> FilmStock? { builtIn(id: id) ?? StockRegistry.stock(id: id) }
@@ -360,6 +361,139 @@ extension FilmStock {
         s.black = RGB(repeating: 0.03); s.white = RGB(repeating: 0.96)
         s.grain = 1.0; s.grainSize = 1.9; s.halation = 0.3; s.halationTint = RGB(1, 1, 1); s.bloom = 0.3
         s.softness = 0.35; s.aberration = 0; s.flare = 0.5; s.vignette = 0.5
+        return s
+    }()
+
+    // MARK: After real films
+    // Tuned by eye on real photos to each film's well-known character (not measured from scans of the stock).
+
+    /// After Kodak Gold 200: the warm, golden consumer film.
+    static let gold: FilmStock = {
+        var s = FilmStock(id: "gold", name: "Gold", iso: 200,
+                          blurb: "After Kodak Gold. Warm and golden, rich yellows and reds, creamy highlights.")
+        s.exposureBias = 0.15
+        s.contrast = RGB(0.74, 0.72, 0.66); s.balance = RGB(0.14, 0.06, -0.16)
+        s.black = RGB(0.050, 0.048, 0.040); s.white = RGB(0.99, 0.965, 0.86)
+        s.saturation = 1.08; s.temperature = 0.26; s.tint = 0.02
+        s.hue(.red, 2, sat: 1.12)
+        s.hue(.yellow, -8, sat: 1.2, lum: 0.05)
+        s.hue(.green, -18, sat: 0.9)
+        s.hue(.cyan, -4, sat: 0.92)
+        s.hue(.blue, -8, sat: 0.88)
+        s.hue(.magenta, -8, sat: 0.9)
+        s.highlightTint = RGB(0.02, 0.01, -0.02)
+        s.grain = 0.6; s.halation = 0.6; s.bloom = 0.35; s.softness = 0.35; s.aberration = 0.4; s.flare = 0.55
+        s.vignette = 0.28
+        return s
+    }()
+
+    /// After Kodak Portra 400: the portrait film — gentle contrast, natural warm skin, quiet greens, huge latitude.
+    static let portrait: FilmStock = {
+        var s = FilmStock(id: "portrait", name: "Portrait", iso: 400,
+                          blurb: "After Kodak Portra. Soft contrast, warm natural skin, muted greens, fine grain.")
+        s.exposureBias = 0.25
+        s.contrast = RGB(0.58, 0.58, 0.55); s.balance = RGB(0.08, 0.02, -0.06)
+        s.black = RGB(0.060, 0.062, 0.062); s.white = RGB(0.985, 0.965, 0.92)
+        s.toe = 0.85
+        s.saturation = 0.96; s.temperature = 0.12; s.tint = 0.03
+        s.hue(.red, 4, sat: 0.98, lum: 0.02)
+        s.hue(.yellow, -2, sat: 0.95)
+        s.hue(.green, -10, sat: 0.78)
+        s.hue(.cyan, 4, sat: 0.95)
+        s.hue(.blue, -10, sat: 0.88)
+        s.hue(.magenta, 0, sat: 0.82)
+        s.grain = 0.4; s.halation = 0.45; s.bloom = 0.35; s.softness = 0.3; s.aberration = 0.3; s.flare = 0.5
+        s.vignette = 0.2
+        return s
+    }()
+
+    /// After Kodak Ektar 100: the most saturated colour negative — punchy reds, deep blues, very fine grain.
+    static let vivid: FilmStock = {
+        var s = FilmStock(id: "vivid", name: "Vivid", iso: 100,
+                          blurb: "After Kodak Ektar. Bold saturated colour, punchy reds, deep blue skies, fine grain.")
+        s.contrast = RGB(0.84, 0.82, 0.82); s.balance = RGB(0.04, 0.0, -0.02)
+        s.black = RGB(0.030, 0.032, 0.038); s.white = RGB(0.985, 0.98, 0.95)
+        s.saturation = 1.25; s.temperature = 0.02
+        s.hue(.red, 0, sat: 1.25)
+        s.hue(.yellow, -4, sat: 1.1)
+        s.hue(.green, -6, sat: 1.05)
+        s.hue(.cyan, 6, sat: 1.15)
+        s.hue(.blue, -4, sat: 1.2, lum: -0.06)
+        s.hue(.magenta, -6, sat: 1.1)
+        s.highlightColour = 0.8
+        s.grain = 0.25; s.halation = 0.35; s.bloom = 0.2; s.softness = 0.15; s.aberration = 0.25; s.flare = 0.4
+        s.vignette = 0.22
+        return s
+    }()
+
+    /// After Fujifilm Superia 400: Fuji's cooler, greener everyday film — lush greens, cyan skies, crisp.
+    static let verde: FilmStock = {
+        var s = FilmStock(id: "verde", name: "Verde", iso: 400,
+                          blurb: "After Fujifilm Superia. Cooler and crisp, lush greens, cyan skies, green-tinged shade.")
+        s.exposureBias = 0.1
+        s.contrast = RGB(0.72, 0.74, 0.72); s.balance = RGB(-0.04, 0.06, 0.04)
+        s.black = RGB(0.045, 0.058, 0.055); s.white = RGB(0.97, 0.975, 0.95)
+        s.saturation = 1.04; s.temperature = -0.08; s.tint = -0.1
+        s.hue(.red, 0, sat: 1.05)
+        s.hue(.yellow, 6, sat: 0.95)
+        s.hue(.green, 10, sat: 1.12)
+        s.hue(.cyan, 0, sat: 1.1)
+        s.hue(.blue, -8, sat: 1.05)
+        s.hue(.magenta, 8, sat: 0.85)
+        s.shadowTint = RGB(-0.01, 0.008, 0.004)
+        s.grain = 0.6; s.grainSize = 1.1; s.halation = 0.45; s.bloom = 0.3; s.softness = 0.3; s.aberration = 0.35
+        s.flare = 0.5; s.vignette = 0.25
+        return s
+    }()
+
+    /// After Fujifilm Pro 400H shot a stop over: airy pastels, mint greens, pale cyan skies.
+    static let mint: FilmStock = {
+        var s = FilmStock(id: "mint", name: "Mint", iso: 400,
+                          blurb: "After Fujifilm Pro 400H. Bright and pastel, mint greens, pale cyan skies, soft blacks.")
+        s.exposureBias = 0.45
+        s.contrast = RGB(0.54, 0.56, 0.55); s.balance = RGB(-0.02, 0.05, 0.04)
+        s.black = RGB(0.080, 0.090, 0.090); s.white = RGB(0.975, 0.975, 0.95)
+        s.saturation = 0.88; s.temperature = -0.04; s.tint = -0.06
+        s.hue(.red, 4, sat: 0.95, lum: 0.02)
+        s.hue(.yellow, 4, sat: 0.85)
+        s.hue(.green, 14, sat: 0.8, lum: 0.05)
+        s.hue(.cyan, 0, sat: 1.05, lum: 0.04)
+        s.hue(.blue, -12, sat: 0.85, lum: 0.05)
+        s.hue(.magenta, 0, sat: 0.75)
+        s.grain = 0.45; s.halation = 0.35; s.bloom = 0.4; s.softness = 0.35; s.aberration = 0.3; s.flare = 0.5
+        s.vignette = 0.15
+        return s
+    }()
+
+    /// After Fujifilm Velvia 50: landscape slide film — dense blacks, intense colour, deep skies.
+    static let slide: FilmStock = {
+        var s = FilmStock(id: "slide", name: "Slide", iso: 50,
+                          blurb: "After Fujifilm Velvia. Slide film: intense colour, deep blacks and skies, tiny grain.")
+        s.exposureBias = -0.15
+        s.contrast = RGB(0.95, 0.95, 0.98); s.balance = RGB(0.02, -0.03, 0.03)
+        s.black = RGB(0.020, 0.020, 0.030); s.white = RGB(0.99, 0.985, 0.97)
+        s.saturation = 1.35; s.tint = 0.08
+        s.hue(.red, 0, sat: 1.25)
+        s.hue(.yellow, -4, sat: 1.2)
+        s.hue(.green, 6, sat: 1.25, lum: -0.04)
+        s.hue(.cyan, 4, sat: 1.2)
+        s.hue(.blue, 4, sat: 1.25, lum: -0.08)
+        s.hue(.magenta, 0, sat: 1.15)
+        s.highlightColour = 0.8
+        s.grain = 0.2; s.halation = 0.2; s.bloom = 0.15; s.softness = 0.15; s.aberration = 0.2; s.flare = 0.4
+        s.vignette = 0.3
+        return s
+    }()
+
+    /// After Kodak Tri-X 400: the classic reportage black & white — punchy mids, gritty grain.
+    static let press: FilmStock = {
+        var s = FilmStock(id: "press", name: "Press", iso: 400,
+                          blurb: "After Kodak Tri-X. Classic black & white: punchy midtones, deep blacks, bold grain.")
+        s.mono = RGB(0.34, 0.52, 0.14)
+        s.contrast = RGB(repeating: 0.86)
+        s.black = RGB(repeating: 0.035); s.white = RGB(repeating: 0.965)
+        s.grain = 0.75; s.grainSize = 1.4; s.halation = 0.25; s.halationTint = RGB(1, 1, 1); s.bloom = 0.3
+        s.softness = 0.3; s.aberration = 0; s.flare = 0.45; s.vignette = 0.35
         return s
     }()
 }
